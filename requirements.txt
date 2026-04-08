@@ -1,0 +1,10 @@
+langgraph
+langchain
+langchain-ollama
+langchain-google-genai
+elevenlabs
+pydantic
+python-dotenv
+youtube-transcript-api
+langchain-text-splitters
+pydub
