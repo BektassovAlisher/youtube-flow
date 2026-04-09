@@ -6,7 +6,6 @@ import re
 
 @dataclass
 class TranscriptData:
-    """Результат извлечения транскрипта"""
     segments: List[Any]       
     full_text: str            
     metadata: dict            

@@ -8,3 +8,6 @@ python-dotenv
 youtube-transcript-api
 langchain-text-splitters
 pydub
+sqlalchemy
+psycopg2-binary
+langchain-groq

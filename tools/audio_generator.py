@@ -1,6 +1,5 @@
 import os
 from io import BytesIO
-from typing import Dict, List
 from elevenlabs.client import ElevenLabs
 from pydub import AudioSegment
 from dotenv import load_dotenv
@@ -20,9 +19,7 @@ class AudioGeneratorTool:
         }
 
     def generate_podcast_audio(self, script: str, language: str, output_path: str = "podcast.mp3") -> str:
-        """
-        Преобразует текст сценария в аудиофайл с использованием нескольких голосов.
-        """
+        
         voices = self.voice_ids.get(language, self.voice_ids["en"])
         lines = script.strip().split("\n")
         combined_audio = AudioSegment.empty()

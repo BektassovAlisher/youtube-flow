@@ -26,14 +26,7 @@ class ChukingTranscript:
         )
 
     def to_timestamped_text(self, segments: List[Any]) -> str:
-        """
-        Склеивает все сегменты в одну строку с таймстампами.
-        Передаётся напрямую в LLM — один запрос на всё видео.
-
-        Результат:
-        [00:01] текст сегмента
-        [00:05] следующий сегмент
-        """
+       
         lines = []
         for seg in segments:
             text = seg.text if hasattr(seg, "text") else seg.get("text", "")
@@ -43,10 +36,7 @@ class ChukingTranscript:
         return "\n".join(lines)
 
     def _build_documents(self, segments: List[Any], video_id: str) -> List[Document]:
-        """
-        Группируем сегменты по ~500 символов сохраняя таймстамп начала группы.
-        Используется только если нужна нарезка на чанки (длинные видео 2+ часа).
-        """
+        
         docs = []
         buffer_text = []
         buffer_start = None
@@ -93,11 +83,7 @@ class ChukingTranscript:
         return docs
 
     def split(self, segments: List[Any], video_id: str) -> List[Document]:
-        """
-        Используй для длинных видео (2+ часа) когда транскрипт
-        не влезает в контекст LLM целиком.
-        Для обычных видео используй to_timestamped_text().
-        """
+       
         docs = self._build_documents(segments, video_id)
         chunks = self.splitter.split_documents(docs)
 
