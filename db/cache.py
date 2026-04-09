@@ -1,4 +1,4 @@
-from db.database import SessionLocal, Video, Summary, Keyword, PodcastScript
+from db.database import SessionLocal, Video, Summary, Keyword, PodcastScript, PodcastAudio
 
 
 def get_cached_video(video_id: str) -> dict | None:
@@ -24,6 +24,36 @@ def get_cached_video(video_id: str) -> dict | None:
         session.close()
 
 
+def get_cached_audio(video_id: str) -> bytes | None:
+    """Возвращает бинарные данные аудио из БД, если есть"""
+    session = SessionLocal()
+    try:
+        audio = session.query(PodcastAudio).filter(PodcastAudio.video_id == video_id).first()
+        if audio:
+            return audio.audio_data
+        return None
+    finally:
+        session.close()
+
+
+def save_audio_to_cache(video_id: str, audio_data: bytes):
+    """Сохраняет бинарные данные аудио в БД"""
+    session = SessionLocal()
+    try:
+        existing = session.query(PodcastAudio).filter(PodcastAudio.video_id == video_id).first()
+        if existing:
+            existing.audio_data = audio_data
+        else:
+            session.add(PodcastAudio(video_id=video_id, audio_data=audio_data))
+        session.commit()
+        print(f"✅ Аудио сохранено в БД: {video_id}")
+    except Exception as e:
+        session.rollback()
+        print(f"🚨 Ошибка сохранения аудио в БД: {e}")
+    finally:
+        session.close()
+
+
 def save_to_cache(
     video_id: str,
     url: str,
@@ -36,7 +66,6 @@ def save_to_cache(
     """Сохраняет все результаты в БД"""
     session = SessionLocal()
     try:
-        # сохраняем видео
         video = Video(
             video_id=video_id,
             url=url,

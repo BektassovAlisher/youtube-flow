@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 import os
 import operator
 from db.database import init_db
-from db.cache import get_cached_video, save_to_cache
+from db.cache import get_cached_video, save_to_cache, get_cached_audio, save_audio_to_cache
 
 init_db()
 
@@ -263,14 +263,30 @@ def route_critic(state: GraphState):
 
 
 def audio_node(state: GraphState):
-    print("🎙️ Агент 5: Генерирую аудио через ElevenLabs...")
+    video_id = state["video_metadata"]["video_id"]
+    output_path = "podcast.mp3"
 
+    # Проверяем кэш аудио в БД
+    cached_audio = get_cached_audio(video_id)
+    if cached_audio:
+        print(f"💾 Аудио найдено в БД, пропускаю генерацию: {video_id}")
+        with open(output_path, "wb") as f:
+            f.write(cached_audio)
+        print(f"✅ Аудио восстановлено из БД: {output_path}")
+        return {"audio_path": output_path}
+
+    print("🎙️ Агент 5: Генерирую аудио через ElevenLabs...")
     audio_tool = AudioGeneratorTool()
     try:
         path = audio_tool.generate_podcast_audio(
             script=state["podcast_script"],
-            language=state["video_metadata"]["language"]
+            language=state["video_metadata"]["language"],
+            output_path=output_path,
         )
+        # Сохраняем аудио в БД
+        with open(path, "rb") as f:
+            audio_bytes = f.read()
+        save_audio_to_cache(video_id, audio_bytes)
         return {"audio_path": path}
     except Exception as e:
         print(f"🚨 Ошибка в audio_node: {e}")
@@ -342,7 +358,6 @@ agent.add_conditional_edges(
     }
 )
 
-# Если кэш не найден — идём через генерацию
 agent.add_edge("summarize", "merge")      
 agent.add_edge("keywords", "merge")        
 agent.add_edge("merge", "script")          
@@ -352,7 +367,7 @@ agent.add_conditional_edges(
     "critic",
     route_critic,
     {
-        "audio": "save_to_db",   # сначала сохраняем в БД
+        "audio": "save_to_db",   
         "script" : "script" 
     }
 )
@@ -364,7 +379,7 @@ app = agent.compile()
 if __name__ == "__main__":
     print("🚀 Запуск мультиагентной системы...")
     data = {
-        "video_url": "https://www.youtube.com/watch?v=jdknLDkBS3k",
+        "video_url": "https://www.youtube.com/watch?v=22tkx79icy4",
         "retry_count": 0,       
         "max_retries": 2,       
         "critic_feedback": "",   

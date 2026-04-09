@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Text, Float, DateTime, ForeignKey, Integer
+from sqlalchemy import create_engine, Column, Text, Float, DateTime, ForeignKey, Integer, LargeBinary
 from sqlalchemy.orm import declarative_base, sessionmaker
 import os
 from datetime import datetime
@@ -45,6 +45,15 @@ class PodcastScript(Base):
     id         = Column(Integer, primary_key=True, autoincrement=True)
     video_id   = Column(Text, ForeignKey("videos.video_id"), nullable=False)
     script     = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PodcastAudio(Base):
+    __tablename__ = "podcast_audio"
+
+    id         = Column(Integer, primary_key=True, autoincrement=True)
+    video_id   = Column(Text, ForeignKey("videos.video_id"), nullable=False, unique=True)
+    audio_data = Column(LargeBinary, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
