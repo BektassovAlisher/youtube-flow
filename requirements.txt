@@ -11,3 +11,5 @@ pydub
 sqlalchemy
 psycopg2-binary
 langchain-groq
+fastapi
+fastapi[standard]
