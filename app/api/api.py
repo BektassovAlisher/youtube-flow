@@ -3,8 +3,9 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import List
 from agent.agent import app as agent_app
-from db.cache import get_cached_video, get_cached_audio
+from db.cache import get_cached_video, get_cached_audio, delete_cache, delete_expired_cache
 from db.database import SessionLocal, Video
+
 
 app = FastAPI(
     title="VideoFlow API",
@@ -55,14 +56,13 @@ def generate_podcast(req: GenerateRequest):
         }
 
         result = agent_app.invoke(data)
-
         video_id = result["video_metadata"]["video_id"]
         cached_audio = get_cached_audio(video_id)
 
         return GenerateResponse(
             video_id=video_id,
             summary=result.get("summary", ""),
-            keywords=result.get("keywords", []),      
+            keywords=result.get("keywords", []),
             podcast_script=result.get("podcast_script", ""),
             audio_cached=cached_audio is not None,
             cache_hit=result.get("cache_hit", False)
@@ -71,10 +71,9 @@ def generate_podcast(req: GenerateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
 @app.get("/videos", response_model=list[VideoListItem])
 def list_videos():
-    session = SessionLocal()   
+    session = SessionLocal()
     try:
         videos = session.query(Video).all()
         return [
@@ -107,8 +106,8 @@ def get_video(video_id: str):
 @app.get("/videos/{video_id}/audio")
 def get_audio(video_id: str):
     audio_data = get_cached_audio(video_id)
-    if not audio_data:                            
-        raise HTTPException(status_code=404, detail="Аудио не найдено в кэше")  # ✅ status_code
+    if not audio_data:
+        raise HTTPException(status_code=404, detail="Аудио не найдено в кэше")
     return Response(
         content=audio_data,
         media_type="audio/mpeg",
@@ -119,3 +118,18 @@ def get_audio(video_id: str):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.delete("/videos/expired")
+def delete_expired():
+    deleted = delete_expired_cache(days=7)
+    return {"message": f"Удалено {deleted} устаревших видео"}
+
+
+@app.delete("/videos/{video_id}")
+def delete_video(video_id: str):
+    cached = get_cached_video(video_id)
+    if not cached:
+        raise HTTPException(status_code=404, detail="Видео не найдено")
+    delete_cache(video_id)
+    return {"message": f"Видео {video_id} удалено из кэша"}
