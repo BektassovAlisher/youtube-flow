@@ -1,6 +1,5 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
-from langgraph.graph import START, END, StateGraph
 from typing import TypedDict, List, Annotated
 import json
 from tools.youtube_scraper import YoutubeExtractTool
@@ -11,34 +10,9 @@ import os
 import operator
 from db.database import init_db
 from db.cache import get_cached_video, save_to_cache, get_cached_audio, save_audio_to_cache
+from agent.agent_state import GraphState, extract_text, llm, llm2
 
 init_db()
-
-load_dotenv()
-
-GOOGLE_API = os.getenv("GOOGLE_API_KEY")
-llm = ChatGoogleGenerativeAI(model="gemini-3-flash-preview", api_key=GOOGLE_API)
-llm2 = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
-
-class GraphState(TypedDict):
-    video_url: str
-    transcript: str        
-    video_metadata: dict
-    summary: str
-    keywords: List[str]
-    podcast_script: str
-    audio_path: str
-    agent_execution_order: Annotated[List[str], operator.add]
-    retry_count: int       
-    critic_feedback: str    
-    max_retries: int    
-    is_valid: bool
-    cache_hit: bool
-
-def extract_text(result) -> str:
-    if isinstance (result.content, list):
-        return result.content[0]["text"]
-    return result.content
 
 
 def extract_transcript(state: GraphState):
@@ -50,6 +24,70 @@ def extract_transcript(state: GraphState):
             "video_metadata": text.metadata
             }
     
+
+def classify_node(state: GraphState):
+    print("🔍 Агент 1: Классифицирую видео...")
+    
+    transcript = state["transcript"]
+    metadata = state["video_metadata"]
+    
+    prompt = f"""Ты — классификатор видео-контента.
+
+Перед тобой транскрипт видео и метаданные.
+
+---МЕТАДАННЫЕ---
+Название: {metadata.get("title", "Неизвестно")}
+---ТРАНСКРИПТ (первые 2000 символов)---
+{transcript[:2000]}
+---КОНЕЦ---
+
+Определи тип видео. Верни ТОЛЬКО валидный JSON:
+{{
+    "category": "educational" | "entertainment" | "news" | "random" | "music" | "gaming",
+    "is_suitable": true/false,
+    "confidence": 0.0-1.0,
+    "reason": "краткое объяснение"
+}}
+
+is_suitable = true ТОЛЬКО если это обучающий/образовательный контент (лекция, туториал, курс, объяснение концепций).
+Без markdown, без ```json.
+"""
+    
+    result = llm2.invoke(prompt)
+    raw = extract_text(result).strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    
+    try:
+        classification = json.loads(raw)
+    except:
+        classification = {"category": "unknown", "is_suitable": True, "confidence": 0.5, "reason": "parse error"}
+    
+    print(f"📊 Категория: {classification['category']} | Подходит: {classification['is_suitable']} | Уверенность: {classification['confidence']}")
+    
+    return {
+        "video_category": classification["category"],
+        "is_suitable": classification["is_suitable"],
+        "classification_confidence": classification["confidence"],
+        "classification_reason": classification["reason"],
+        "agent_execution_order": ["classify"]
+    }
+
+
+def route_classify(state: GraphState):
+    if state.get("is_suitable") and state.get("classification_confidence", 1.0) >= 0.6:
+        return "cache_node"
+    else:
+        return "reject"
+
+def reject_node(state: GraphState):
+    reason = state.get("classification_reason", "")
+    category = state.get("video_category", "unknown")
+    print(f"🚫 Видео отклонено. Категория: {category}. Причина: {reason}")
+    return {
+        "summary": f"❌ Видео не подходит для обработки.\nКатегория: {category}\nПричина: {reason}\n\nПожалуйста, выберите образовательное видео (лекция, туториал, курс).",
+        "audio_path": "rejected",
+        "agent_execution_order": ["reject"]
+    }
+
 def summarize_node(state: GraphState):
     print("📝 Агент 2: Пишу конспект...")
     
@@ -320,6 +358,7 @@ def save_to_db_node(state: GraphState):
         summary=state["summary"],
         keywords=state["keywords"],
         script=state["podcast_script"],
+        category=state.get("video_category", "unknown"),
     )
     return {}
 
@@ -328,62 +367,3 @@ def route_cache(state: GraphState):
     if state.get("cache_hit"):
         return ["audio"]
     return ["summarize", "keywords"]
-
-
-
-agent = StateGraph(GraphState)
-
-agent.add_node("extract_transcript", extract_transcript)
-agent.add_node("summarize", summarize_node)
-agent.add_node("keywords", keyword_node)
-agent.add_node("merge", merge_node)       
-agent.add_node("script", script_node)
-agent.add_node("audio", audio_node)
-agent.add_node("critic", critic_node)
-agent.add_node("cache_node", cache_node)
-agent.add_node("save_to_db", save_to_db_node)
-
-agent.add_edge(START, "extract_transcript")
-agent.add_edge("extract_transcript", "cache_node")
-
-agent.add_conditional_edges(
-    "cache_node",
-    route_cache,
-    {
-        "audio": "audio",
-        "summarize": "summarize",
-        "keywords": "keywords",
-    }
-)
-
-agent.add_edge("summarize", "merge")      
-agent.add_edge("keywords", "merge")        
-agent.add_edge("merge", "script")          
-agent.add_edge("script", "critic")
-
-agent.add_conditional_edges(
-    "critic",
-    route_critic,
-    {
-        "audio": "save_to_db",   
-        "script" : "script" 
-    }
-)
-
-agent.add_edge("save_to_db", "audio")
-agent.add_edge("audio", END)
-app = agent.compile()
-
-if __name__ == "__main__":
-    print("🚀 Запуск мультиагентной системы...")
-    data = {
-        "video_url": "https://www.youtube.com/watch?v=22tkx79icy4",
-        "retry_count": 0,       
-        "max_retries": 2,       
-        "critic_feedback": "",   
-        "is_valid": False,
-        "cache_hit": False,       
-        "agent_execution_order": []  
-    }
-    final_state = app.invoke(data)
-    print("--- ГОТОВО! Проверь файл podcast.mp3 ---")

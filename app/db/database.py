@@ -18,6 +18,7 @@ class Video(Base):
     url          = Column(Text, nullable=False)
     language     = Column(Text)
     duration_sec = Column(Float)
+    category     = Column(Text)
     created_at   = Column(DateTime, default=datetime.utcnow)
 
 

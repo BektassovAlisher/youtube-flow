@@ -1,8 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
-from typing import List
-from agent.agent import app as agent_app
+from typing import List, Optional
+from agent.agent_node import app as agent_app
 from db.cache import get_cached_video, get_cached_audio, delete_cache, delete_expired_cache
 from db.database import SessionLocal, Video
 
@@ -25,6 +25,9 @@ class GenerateResponse(BaseModel):
     podcast_script: str
     audio_cached: bool
     cache_hit: bool
+    rejected: bool
+    video_category: Optional[str] = None
+    classification_reason: Optional[str] = None
 
 
 class VideoInfo(BaseModel):
@@ -33,6 +36,7 @@ class VideoInfo(BaseModel):
     keywords: List[str]
     podcast_script: str
     language: str
+    category: Optional[str] = None
 
 
 class VideoListItem(BaseModel):
@@ -40,6 +44,7 @@ class VideoListItem(BaseModel):
     url: str
     language: str | None
     duration_sec: float | None
+    category: str | None = None
 
 
 @app.post("/generate", response_model=GenerateResponse)
@@ -56,7 +61,23 @@ def generate_podcast(req: GenerateRequest):
         }
 
         result = agent_app.invoke(data)
+
         video_id = result["video_metadata"]["video_id"]
+        rejected = result.get("audio_path") == "rejected"
+
+        if rejected:
+            return GenerateResponse(
+                video_id=video_id,
+                summary=result.get("summary", ""),
+                keywords=[],
+                podcast_script="",
+                audio_cached=False,
+                cache_hit=False,
+                rejected=True,
+                video_category=result.get("video_category"),
+                classification_reason=result.get("classification_reason"),
+            )
+
         cached_audio = get_cached_audio(video_id)
 
         return GenerateResponse(
@@ -65,7 +86,10 @@ def generate_podcast(req: GenerateRequest):
             keywords=result.get("keywords", []),
             podcast_script=result.get("podcast_script", ""),
             audio_cached=cached_audio is not None,
-            cache_hit=result.get("cache_hit", False)
+            cache_hit=result.get("cache_hit", False),
+            rejected=False,
+            video_category=result.get("video_category"),
+            classification_reason=result.get("classification_reason"),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -82,6 +106,7 @@ def list_videos():
                 url=v.url,
                 language=v.language,
                 duration_sec=v.duration_sec,
+                category=v.category,
             )
             for v in videos
         ]
@@ -99,7 +124,8 @@ def get_video(video_id: str):
         summary=cached["summary"],
         keywords=cached["keywords"],
         podcast_script=cached["podcast_script"],
-        language=cached["language"]
+        language=cached["language"],
+        category=cached.get("category"),
     )
 
 

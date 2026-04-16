@@ -36,6 +36,7 @@ def get_cached_video(video_id: str, ttl_days: int = 7) -> dict | None:
         return {
             "video_id":       video.video_id,
             "language":       video.language,
+            "category":       video.category,
             "summary":        summary.content if summary else "",
             "keywords":       [k.keyword for k in keywords],
             "podcast_script": script.script if script else "",
@@ -64,6 +65,7 @@ def save_to_cache(
     summary: str,
     keywords: list[str],
     script: str,
+    category: str = None,
 ):
     session = SessionLocal()
     try:
@@ -72,6 +74,7 @@ def save_to_cache(
             url=url,
             language=language,
             duration_sec=duration_sec,
+            category=category,
         ))
 
         _delete_children(session, video_id)
