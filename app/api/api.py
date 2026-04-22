@@ -3,7 +3,8 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import List, Optional
 from agent.agent_node import app as agent_app
-from db.cache import get_cached_video, get_cached_audio, delete_cache, delete_expired_cache
+from agent.agent import qa_agent
+from db.cache import get_cached_video, get_cached_audio, delete_cache, delete_expired_cache, save_audio_to_cache
 from db.database import SessionLocal, Video
 
 
@@ -16,6 +17,7 @@ app = FastAPI(
 
 class GenerateRequest(BaseModel):
     video_url: str
+    skip_audio: bool = False  # True → только текст, аудио можно сгенерировать позже
 
 
 class GenerateResponse(BaseModel):
@@ -26,8 +28,24 @@ class GenerateResponse(BaseModel):
     audio_cached: bool
     cache_hit: bool
     rejected: bool
+    skip_audio: bool = False
     video_category: Optional[str] = None
     classification_reason: Optional[str] = None
+
+
+class QARequest(BaseModel):
+    question: str
+
+
+class QASource(BaseModel):
+    timestamp: str
+    url: str
+
+
+class QAResponse(BaseModel):
+    video_id: str
+    answer: str
+    sources: List[QASource]
 
 
 class VideoInfo(BaseModel):
@@ -56,8 +74,10 @@ def generate_podcast(req: GenerateRequest):
             "max_retries": 2,
             "critic_feedback": "",
             "is_valid": False,
+            "is_suitable": False,
             "cache_hit": False,
-            "agent_execution_order": []
+            "agent_execution_order": [],
+            "skip_audio": req.skip_audio,
         }
 
         result = agent_app.invoke(data)
@@ -74,6 +94,7 @@ def generate_podcast(req: GenerateRequest):
                 audio_cached=False,
                 cache_hit=False,
                 rejected=True,
+                skip_audio=req.skip_audio,
                 video_category=result.get("video_category"),
                 classification_reason=result.get("classification_reason"),
             )
@@ -88,9 +109,67 @@ def generate_podcast(req: GenerateRequest):
             audio_cached=cached_audio is not None,
             cache_hit=result.get("cache_hit", False),
             rejected=False,
+            skip_audio=req.skip_audio,
             video_category=result.get("video_category"),
             classification_reason=result.get("classification_reason"),
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/videos/{video_id}/qa", response_model=QAResponse)
+def ask_video_question(video_id: str, req: QARequest):
+    """Ответ на вопросы по конкретному видео через RAG."""
+    try:
+        # Проверяем, есть ли видео в обычном кэше
+        cached = get_cached_video(video_id)
+        if not cached:
+            raise HTTPException(status_code=404, detail="Видео не найдено. Сначала запустите /generate.")
+
+        result = qa_agent(video_id, req.question)
+        return QAResponse(
+            video_id=video_id,
+            answer=result["answer"],
+            sources=result["sources"]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/videos/{video_id}/audio", response_model=AudioGenerateResponse)
+def generate_audio_for_video(video_id: str):
+    """Генерирует аудио для уже обработанного видео (скрипт должен быть в кэше)."""
+    # Проверяем кэш аудио
+    cached_audio = get_cached_audio(video_id)
+    if cached_audio:
+        output_path = f"{video_id}.mp3"
+        with open(output_path, "wb") as f:
+            f.write(cached_audio)
+        return AudioGenerateResponse(video_id=video_id, audio_path=output_path, from_cache=True)
+
+    # Берём скрипт из кэша видео
+    cached = get_cached_video(video_id)
+    if not cached:
+        raise HTTPException(status_code=404, detail="Видео не найдено в кэше. Сначала запустите /generate.")
+
+    script = cached.get("podcast_script", "")
+    language = cached.get("language", "ru")
+    if not script:
+        raise HTTPException(status_code=400, detail="Скрипт подкаста не найден.")
+
+    try:
+        from tools.audio_generator import AudioGeneratorTool
+        audio_tool = AudioGeneratorTool()
+        output_path = f"{video_id}.mp3"
+        path = audio_tool.generate_podcast_audio(
+            script=script,
+            language=language,
+            output_path=output_path,
+        )
+        with open(path, "rb") as f:
+            audio_bytes = f.read()
+        save_audio_to_cache(video_id, audio_bytes)
+        return AudioGenerateResponse(video_id=video_id, audio_path=path, from_cache=False)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

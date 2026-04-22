@@ -10,6 +10,7 @@ import os
 import operator
 from db.database import init_db
 from db.cache import get_cached_video, save_to_cache, get_cached_audio, save_audio_to_cache
+from db.chroma.vectore_store import rag_store
 from agent.agent_state import GraphState, extract_text, llm, llm2
 
 init_db()
@@ -21,7 +22,8 @@ def extract_transcript(state: GraphState):
     text = extractor.process_video(state["video_url"])
     splitted_text = chunking.to_timestamped_text(text.segments)
     return {"transcript": splitted_text,
-            "video_metadata": text.metadata
+            "video_metadata": text.metadata,
+            "segments": text.segments
             }
     
 
@@ -365,5 +367,68 @@ def save_to_db_node(state: GraphState):
 
 def route_cache(state: GraphState):
     if state.get("cache_hit"):
+        if state.get("skip_audio"):
+            return ["end"]
         return ["audio"]
     return ["summarize", "keywords"]
+
+
+def route_post_save(state: GraphState):
+    if state.get("skip_audio"):
+        print("⏭️  Пропускаем генерацию аудио (skip_audio=True). Граф завершён.")
+        return "end"
+    return "audio"
+
+
+def rag_index_node(state: GraphState):
+    """Агент индексации: разбивает транскрипт на чанки и сохраняет в векторную БД."""
+    print("🧠 Агент RAG: Индексирую транскрипт...")
+    
+    segments = state.get("segments", [])
+    video_id = state["video_metadata"]["video_id"]
+    
+    if not segments:
+        return {"vector_index_status": "skipped (no segments)"}
+        
+    chunker = ChukingTranscript()
+    chunks = chunker.split(segments, video_id)
+    
+    rag_store.add_documents(chunks, video_id)
+    
+    return {"vector_index_status": f"indexed_{len(chunks)}_chunks"}
+
+
+def qa_agent(video_id: str, question: str):
+    """Утилита для QA по видео."""
+    # 1. Поиск релевантных чанков
+    docs = rag_store.search(question, video_id, k=5)
+    
+    context_parts = []
+    sources = []
+    for d in docs:
+        ts = d.metadata.get("timestamp", "00:00")
+        url = d.metadata.get("youtube_url", "")
+        context_parts.append(f"[{ts}] {d.page_content}")
+        sources.append({"timestamp": ts, "url": url})
+        
+    context = "\n\n".join(context_parts)
+    
+    prompt = f"""Ты — ассистент по вопросам к видео-лекциям. 
+Используй предоставленный контекст из транскрипта, чтобы ответить на вопрос.
+
+---КОНТЕКСТ---
+{context}
+---КОНЕЦ КОНТЕКСТА---
+
+Вопрос: {question}
+
+Если в контексте нет ответа, так и скажи. Не придумывай факты.
+Отвечай на языке вопроса.
+В конце ответа добавь ссылки на таймстампы из контекста, если они помогли ответить.
+"""
+
+    result = llm.invoke(prompt)
+    return {
+        "answer": extract_text(result),
+        "sources": sources
+    }

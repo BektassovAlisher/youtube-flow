@@ -10,10 +10,12 @@ from agent.agent import (
     audio_node, 
     cache_node, 
     save_to_db_node,
+    rag_index_node, # добавленный узел
     GraphState,
     route_classify,
     route_cache,
-    route_critic
+    route_critic,
+    route_post_save,
 )
 
 from langgraph.graph import StateGraph, START, END
@@ -22,6 +24,7 @@ agent = StateGraph(GraphState)
 
 agent.add_node("extract_transcript", extract_transcript)
 agent.add_node("classify", classify_node)
+agent.add_node("rag_index", rag_index_node) # добавленный узел
 agent.add_node("reject", reject_node)
 agent.add_node("summarize", summarize_node)
 agent.add_node("keywords", keyword_node)
@@ -32,8 +35,16 @@ agent.add_node("critic", critic_node)
 agent.add_node("cache_node", cache_node)
 agent.add_node("save_to_db", save_to_db_node)
 
+# ── рёбра ─────────────────────────────────────────────────────────
+
 agent.add_edge(START, "extract_transcript")
+
+# Запускаем классификацию и индексацию параллельно
 agent.add_edge("extract_transcript", "classify")
+agent.add_edge("extract_transcript", "rag_index")
+
+# Ветка индексации заканчивается здесь
+agent.add_edge("rag_index", END)
 
 agent.add_conditional_edges(
     "classify",
@@ -53,6 +64,7 @@ agent.add_conditional_edges(
         "audio": "audio",
         "summarize": "summarize",
         "keywords": "keywords",
+        "end": END,
     }
 )
 
@@ -70,7 +82,15 @@ agent.add_conditional_edges(
     }
 )
 
-agent.add_edge("save_to_db", "audio")
+agent.add_conditional_edges(
+    "save_to_db",
+    route_post_save,
+    {
+        "audio": "audio",
+        "end": END,
+    }
+)
+
 agent.add_edge("audio", END)
 
 app = agent.compile()
@@ -83,8 +103,15 @@ if __name__ == "__main__":
         "max_retries": 2,       
         "critic_feedback": "",   
         "is_valid": False,
+        "is_suitable": False,
         "cache_hit": False,       
-        "agent_execution_order": []  
+        "agent_execution_order": [],
+        "skip_audio": True,
     }
     final_state = app.invoke(data)
-    print("--- ГОТОВО! Проверь файл podcast.mp3 ---")
+    print("--- ГОТОВО! ---")
+    print(f"Статус RAG: {final_state.get('vector_index_status')}")
+    if not data["skip_audio"]:
+        print("Проверь файл podcast.mp3")
+    else:
+        print("Текст сохранён в БД. Для аудио запусти generate_audio() или установи skip_audio=False.")

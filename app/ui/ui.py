@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import time
 
-# ─── Configuration ──────────────────────────────────────────────────
 API_URL = "http://127.0.0.1:8000"
 
 CATEGORY_LABELS = {
@@ -22,7 +21,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── Custom CSS ─────────────────────────────────────────────────────
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
@@ -58,11 +56,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ─── State ──────────────────────────────────────────────────────────
 if 'page' not in st.session_state:
     st.session_state.page = "Generate"
 
-# ─── API Helpers ────────────────────────────────────────────────────
 def get_all_videos():
     try:
         r = requests.get(f"{API_URL}/videos")
@@ -84,7 +80,13 @@ def delete_video(video_id):
     except:
         return False
 
-# ─── Sidebar ────────────────────────────────────────────────────────
+def ask_question(video_id, question):
+    try:
+        r = requests.post(f"{API_URL}/videos/{video_id}/qa", json={"question": question})
+        return r.json() if r.status_code == 200 else None
+    except:
+        return None
+
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3064/3064197.png", width=80)
     st.title("VideoFlow")
@@ -105,9 +107,6 @@ with st.sidebar:
     except:
         st.error("API: Offline")
 
-# ═══════════════════════════════════════════════════════════════════
-#  PAGE: Generate
-# ═══════════════════════════════════════════════════════════════════
 if st.session_state.page == "Generate":
     st.title("✨ Создать новый подкаст")
     st.write("Вставьте ссылку на YouTube видео, и наш ИИ превратит его в увлекательный подкаст.")
@@ -121,7 +120,7 @@ if st.session_state.page == "Generate":
             try:
                 response = requests.post(
                     f"{API_URL}/generate",
-                    json={"video_url": url},
+                    json={"video_url": url, "skip_audio": True},
                     timeout=300,
                 )
 
@@ -151,11 +150,10 @@ if st.session_state.page == "Generate":
                         )
                     else:
                         status.update(
-                            label="✅ Готово! Подкаст создан.",
+                            label="✅ Готово! Текст сохранён в кэш.",
                             state="complete",
                             expanded=False,
                         )
-                        st.balloons()
 
                         # Classification info
                         st.markdown(
@@ -163,32 +161,55 @@ if st.session_state.page == "Generate":
                             unsafe_allow_html=True,
                         )
 
-                        t1, t2, t3 = st.tabs(
-                            ["🎙️ Аудио", "📝 Конспект", "🎬 Скрипт"]
+                        t1, t2, t3, t4 = st.tabs(
+                            ["📝 Конспект", "🎬 Скрипт", "🎙️ Аудио", "💬 Чат с видео"]
                         )
 
                         with t1:
-                            st.subheader("Слушать подкаст")
-                            audio_url = (
-                                f"{API_URL}/videos/{data['video_id']}/audio"
-                            )
-                            st.audio(audio_url)
-                            st.info(
-                                f"Кэш: {'Использован' if data['cache_hit'] else 'Создан заново'}"
-                            )
-
-                        with t2:
                             st.markdown(data["summary"])
                             st.write("---")
                             st.write("**Ключевые слова:**")
                             st.write(", ".join(data["keywords"]))
 
-                        with t3:
+                        with t2:
                             st.text_area(
                                 "Сценарий диалога",
                                 data["podcast_script"],
                                 height=400,
                             )
+
+                            st.caption(f"Кэш: {'Использован' if data['cache_hit'] else 'Создан заново'}")
+
+                        with t4:
+                            st.subheader("💬 Спроси что-нибудь у этого видео")
+                            if "chat_history" not in st.session_state:
+                                st.session_state.chat_history = {}
+                            
+                            v_id = data['video_id']
+                            if v_id not in st.session_state.chat_history:
+                                st.session_state.chat_history[v_id] = []
+                            
+                            # Показываем историю
+                            for chat in st.session_state.chat_history[v_id]:
+                                with st.chat_message("user"):
+                                    st.write(chat["question"])
+                                with st.chat_message("assistant"):
+                                    st.write(chat["answer"])
+                                    if chat.get("sources"):
+                                        with st.expander("Источники"):
+                                            for s in chat["sources"]:
+                                                st.markdown(f"- [{s['timestamp']}]({s['url']})")
+
+                            # Поле ввода
+                            if q := st.chat_input("Напр.: О чем говорилось на 15-й минуте?"):
+                                st.session_state.chat_history[v_id].append({"question": q, "answer": "..."})
+                                with st.spinner("Думаю..."):
+                                    ans = ask_question(v_id, q)
+                                    if ans:
+                                        st.session_state.chat_history[v_id][-1]["answer"] = ans["answer"]
+                                        st.session_state.chat_history[v_id][-1]["sources"] = ans["sources"]
+                                        st.rerun()
+
                 else:
                     st.error(f"Ошибка сервера: {response.text}")
             except Exception as e:
@@ -226,8 +247,43 @@ elif st.session_state.page == "Library":
                     details = get_video_details(video_id)
                     if details:
                         with st.expander("Детали видео", expanded=True):
-                            st.audio(f"{API_URL}/videos/{video_id}/audio")
+                            audio_resp = requests.get(f"{API_URL}/videos/{video_id}/audio")
+                            if audio_resp.status_code == 200:
+                                st.audio(f"{API_URL}/videos/{video_id}/audio")
+                            else:
+                                st.info("🎙️ Аудио ещё не сгенерировано.")
+                                if st.button("Создать аудио", key=f"gen_{video_id}"):
+                                    with st.spinner("Генерирую..."):
+                                        r = requests.post(f"{API_URL}/videos/{video_id}/audio", timeout=300)
+                                        if r.status_code == 200:
+                                            st.success("✅ Аудио готово!")
+                                            st.rerun()
+                                        else:
+                                            st.error(r.text)
                             st.markdown(details["summary"])
+                            
+                            st.divider()
+                            st.subheader("💬 Чат с видео")
+                            v_id = video_id
+                            if "chat_history" not in st.session_state:
+                                st.session_state.chat_history = {}
+                            if v_id not in st.session_state.chat_history:
+                                st.session_state.chat_history[v_id] = []
+                            
+                            for chat in st.session_state.chat_history[v_id]:
+                                st.markdown(f"**Вы:** {chat['question']}")
+                                st.markdown(f"**Ассистент:** {chat['answer']}")
+                            
+                            q_lib = st.text_input("Задать вопрос", key=f"q_{v_id}")
+                            if st.button("Спросить", key=f"btn_q_{v_id}"):
+                                with st.spinner("Поиск ответа..."):
+                                    ans = ask_question(v_id, q_lib)
+                                    if ans:
+                                        st.session_state.chat_history[v_id].append({
+                                            "question": q_lib, 
+                                            "answer": ans["answer"]
+                                        })
+                                        st.rerun()
 
                 if cols[3].button("🗑️", key=f"del_{video_id}"):
                     if delete_video(video_id):

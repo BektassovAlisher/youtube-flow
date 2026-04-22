@@ -1,6 +1,6 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
-from typing import TypedDict, List, Annotated
+from typing import TypedDict, List, Annotated, Any
 import operator
 from dotenv import load_dotenv
 import os
@@ -22,10 +22,15 @@ class GraphState(TypedDict):
     critic_feedback: str
     max_retries: int
     is_valid: bool
+    is_suitable: bool 
     cache_hit: bool
     video_category: str
     classification_reason: str
     classification_confidence: float
+    skip_audio: bool  
+    segments: List[Any] = [] # сырые сегменты транскрипта для RAG
+    vector_index_status: str = "" # статус индексации в Chroma
+
 
 def extract_text(result) -> str:
     if isinstance(result.content, list):
