@@ -3,8 +3,11 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import List, Optional
 from agent.agent_node import app as agent_app
-from agent.agent import qa_agent
-from db.cache import get_cached_video, get_cached_audio, delete_cache, delete_expired_cache, save_audio_to_cache
+from agent.agent import qa_agent, recommend_node
+from db.cache import (
+    get_cached_video, get_cached_audio, delete_cache, delete_expired_cache,
+    save_audio_to_cache, get_cached_recommendation,
+)
 from db.database import SessionLocal, Video
 
 
@@ -14,6 +17,8 @@ app = FastAPI(
     version="1.0.0",
 )
 
+
+# ─── Request / Response models ───────────────────────────────────────────────
 
 class GenerateRequest(BaseModel):
     video_url: str
@@ -31,6 +36,7 @@ class GenerateResponse(BaseModel):
     skip_audio: bool = False
     video_category: Optional[str] = None
     classification_reason: Optional[str] = None
+    recommendation: Optional[dict] = None
 
 
 class QARequest(BaseModel):
@@ -64,6 +70,21 @@ class VideoListItem(BaseModel):
     duration_sec: float | None
     category: str | None = None
 
+
+class AudioGenerateResponse(BaseModel):
+    video_id: str
+    audio_path: str
+    from_cache: bool
+
+
+class RecommendResponse(BaseModel):
+    video_id: str
+    courses: List[dict]
+    books: List[dict]
+    from_cache: bool
+
+
+# ─── Endpoints ───────────────────────────────────────────────────────────────
 
 @app.post("/generate", response_model=GenerateResponse)
 def generate_podcast(req: GenerateRequest):
@@ -112,6 +133,7 @@ def generate_podcast(req: GenerateRequest):
             skip_audio=req.skip_audio,
             video_category=result.get("video_category"),
             classification_reason=result.get("classification_reason"),
+            recommendation=result.get("recommendation"),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -121,7 +143,6 @@ def generate_podcast(req: GenerateRequest):
 def ask_video_question(video_id: str, req: QARequest):
     """Ответ на вопросы по конкретному видео через RAG."""
     try:
-        # Проверяем, есть ли видео в обычном кэше
         cached = get_cached_video(video_id)
         if not cached:
             raise HTTPException(status_code=404, detail="Видео не найдено. Сначала запустите /generate.")
@@ -132,14 +153,55 @@ def ask_video_question(video_id: str, req: QARequest):
             answer=result["answer"],
             sources=result["sources"]
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/videos/{video_id}/recommend", response_model=RecommendResponse)
+def get_recommendations(video_id: str):
+    """Получает рекомендации курсов и книг для видео. Использует кэш если есть."""
+    cached = get_cached_video(video_id)
+    if not cached:
+        raise HTTPException(status_code=404, detail="Видео не найдено. Сначала запустите /generate.")
+
+    # Return from cache if already computed
+    cached_rec = get_cached_recommendation(video_id)
+    if cached_rec:
+        return RecommendResponse(
+            video_id=video_id,
+            courses=cached_rec.get("courses", []),
+            books=cached_rec.get("books", []),
+            from_cache=True,
+        )
+
+    # Build a minimal state and call recommend_node directly
+    state = {
+        "video_metadata": {
+            "video_id": video_id,
+            "title": cached.get("title", f"Video {video_id}"),
+            "language": cached.get("language", "en"),
+        },
+        "keywords": cached.get("keywords", []),
+    }
+    try:
+        result = recommend_node(state)
+        rec = result.get("recommendation", {"courses": [], "books": []})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка рекомендаций: {e}")
+
+    return RecommendResponse(
+        video_id=video_id,
+        courses=rec.get("courses", []),
+        books=rec.get("books", []),
+        from_cache=False,
+    )
 
 
 @app.post("/videos/{video_id}/audio", response_model=AudioGenerateResponse)
 def generate_audio_for_video(video_id: str):
     """Генерирует аудио для уже обработанного видео (скрипт должен быть в кэше)."""
-    # Проверяем кэш аудио
     cached_audio = get_cached_audio(video_id)
     if cached_audio:
         output_path = f"{video_id}.mp3"
@@ -147,7 +209,6 @@ def generate_audio_for_video(video_id: str):
             f.write(cached_audio)
         return AudioGenerateResponse(video_id=video_id, audio_path=output_path, from_cache=True)
 
-    # Берём скрипт из кэша видео
     cached = get_cached_video(video_id)
     if not cached:
         raise HTTPException(status_code=404, detail="Видео не найдено в кэше. Сначала запустите /generate.")
@@ -227,8 +288,8 @@ def health():
 
 @app.delete("/videos/expired")
 def delete_expired():
-    deleted = delete_expired_cache(days=7)
-    return {"message": f"Удалено {deleted} устаревших видео"}
+    delete_expired_cache(days=7)
+    return {"message": "Устаревшие видео удалены"}
 
 
 @app.delete("/videos/{video_id}")

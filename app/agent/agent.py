@@ -9,9 +9,14 @@ from dotenv import load_dotenv
 import os
 import operator
 from db.database import init_db
-from db.cache import get_cached_video, save_to_cache, get_cached_audio, save_audio_to_cache
-from db.chroma.vectore_store import rag_store
+from db.cache import (
+    get_cached_video, save_to_cache,
+    get_cached_audio, save_audio_to_cache,
+    get_cached_recommendation, save_recommendation_to_cache,
+)
+from db.chroma.vector_store import rag_store
 from agent.agent_state import GraphState, extract_text, llm, llm2
+from langchain_tavily import TavilySearch
 
 init_db()
 
@@ -292,14 +297,10 @@ def route_critic(state: GraphState):
     retry_count = state.get("retry_count", 0)
     max_retries = state.get("max_retries", 2)
 
-    if is_valid:
-        return "audio"
-    
-    if retry_count >= max_retries:
-        return "audio"
-    
-    else:
-        return "script"
+    if is_valid or retry_count >= max_retries:
+        return "save_to_db"
+
+    return "script"
 
 
 def audio_node(state: GraphState):
@@ -343,6 +344,8 @@ def cache_node(state:GraphState):
             "summary" : cached["summary"],
             "keywords" : cached["keywords"],
             "podcast_script": cached["podcast_script"],
+            "recommendation": cached.get("recommendation"),
+            "video_category": cached.get("category"),
             "cache_hit": True,
         }
 
@@ -354,6 +357,7 @@ def save_to_db_node(state: GraphState):
     meta = state["video_metadata"]
     save_to_cache(
         video_id=meta["video_id"],
+        title=meta.get("title", "Unknown"),
         url=meta["video_url"],
         language=meta["language"],
         duration_sec=meta["total_duration_sec"],
@@ -362,15 +366,21 @@ def save_to_db_node(state: GraphState):
         script=state["podcast_script"],
         category=state.get("video_category", "unknown"),
     )
-    return {}
+
+    # Also persist recommendations if they were generated
+    rec = state.get("recommendation")
+    if rec:
+        save_recommendation_to_cache(meta["video_id"], rec)
+
+    return {"agent_execution_order": ["save_to_db"]}
 
 
 def route_cache(state: GraphState):
     if state.get("cache_hit"):
         if state.get("skip_audio"):
-            return ["end"]
-        return ["audio"]
-    return ["summarize", "keywords"]
+            return "end"
+        return "audio"
+    return "start_pipeline"
 
 
 def route_post_save(state: GraphState):
@@ -381,7 +391,6 @@ def route_post_save(state: GraphState):
 
 
 def rag_index_node(state: GraphState):
-    """Агент индексации: разбивает транскрипт на чанки и сохраняет в векторную БД."""
     print("🧠 Агент RAG: Индексирую транскрипт...")
     
     segments = state.get("segments", [])
@@ -399,8 +408,6 @@ def rag_index_node(state: GraphState):
 
 
 def qa_agent(video_id: str, question: str):
-    """Утилита для QA по видео."""
-    # 1. Поиск релевантных чанков
     docs = rag_store.search(question, video_id, k=5)
     
     context_parts = []
@@ -431,4 +438,68 @@ def qa_agent(video_id: str, question: str):
     return {
         "answer": extract_text(result),
         "sources": sources
+    }
+
+
+def recommend_node(state: GraphState):
+    print("🔎 Агент Рекомендатор: ищу курсы и книги...")
+    video_id = state["video_metadata"]["video_id"]
+
+    cached_rec = get_cached_recommendation(video_id)
+    if cached_rec:
+        print(f"💾 Рекомендации найдены в кэше: {video_id}")
+        return {"recommendation": cached_rec, "agent_execution_order": ["recommend"]}
+
+    title = state.get("video_metadata", {}).get("title", "")
+    keywords = state.get("keywords", [])
+    language = state.get("video_metadata", {}).get("language", "ru")
+
+    search = TavilySearch(
+        max_results=5,
+        topic="general"
+    )
+
+    query_context = f"{title} {' '.join(keywords[:3])}".strip()
+    if not query_context:
+        query_context = "AI"  # Fallback
+
+    try:
+        if language == "ru":
+            courses_query = f"онлайн курсы {query_context}"
+            books_query = f"книги {query_context}"
+        else:
+            courses_query = f"online courses about {query_context}"
+            books_query = f"books about {query_context}"
+
+        courses_raw = search.invoke({"query": courses_query})
+        books_raw = search.invoke({"query": books_query})
+
+       
+        def parse_tavily_results(raw):
+            if isinstance(raw, list):
+                return [{"title": r.get("title", r.get("url", "")), "url": r.get("url", "")} for r in raw if isinstance(r, dict) and r.get("url")]
+            if isinstance(raw, dict) and "results" in raw:
+                return [{"title": r.get("title", r.get("url", "")), "url": r.get("url", "")} for r in raw["results"] if isinstance(r, dict) and r.get("url")]
+            return []
+
+        result_courses = parse_tavily_results(courses_raw)
+        result_books = parse_tavily_results(books_raw)
+    except Exception as e:
+        print(f"🚨 Ошибка recommend_node: {e}")
+        import traceback
+        traceback.print_exc()
+        result_courses = []
+        result_books = []
+
+    recommendation = {"courses": result_courses, "books": result_books}
+
+    if result_courses or result_books:
+        save_recommendation_to_cache(video_id, recommendation)
+        print(f"✅ Рекомендации сохранены: {video_id}")
+    else:
+        print(f"⚠️ Пустые рекомендации — не кэшируем: {video_id}")
+
+    return {
+        "recommendation": recommendation,
+        "agent_execution_order": ["recommend"],
     }

@@ -53,11 +53,34 @@ st.markdown("""
         border: 1px solid #dc2626;
         color: #fca5a5;
     }
+    .rec-card {
+        padding: 12px 16px;
+        border-radius: 10px;
+        background: linear-gradient(135deg, #1e1b4b, #312e81);
+        border: 1px solid #4338ca;
+        margin-bottom: 8px;
+    }
+    .rec-card a {
+        color: #a5b4fc !important;
+        text-decoration: none;
+        font-weight: 500;
+    }
+    .rec-card a:hover {
+        color: #c7d2fe !important;
+        text-decoration: underline;
+    }
     </style>
 """, unsafe_allow_html=True)
 
 if 'page' not in st.session_state:
     st.session_state.page = "Generate"
+if 'last_result' not in st.session_state:
+    st.session_state.last_result = None
+if 'selected_library_video' not in st.session_state:
+    st.session_state.selected_library_video = None
+
+
+# ─── API helpers ─────────────────────────────────────────────────────────────
 
 def get_all_videos():
     try:
@@ -80,12 +103,54 @@ def delete_video(video_id):
     except:
         return False
 
-def ask_question(video_id, question):
+def get_recommendations(video_id):
     try:
-        r = requests.post(f"{API_URL}/videos/{video_id}/qa", json={"question": question})
+        r = requests.post(f"{API_URL}/videos/{video_id}/recommend", timeout=120)
         return r.json() if r.status_code == 200 else None
-    except:
+    except Exception as e:
+        print(f"Recommendations error: {e}")
         return None
+
+
+# ─── Reusable UI components ──────────────────────────────────────────────────
+
+def render_recommendations(rec_data):
+    """Render courses and books from a recommendation dict."""
+    courses = rec_data.get("courses", [])
+    books = rec_data.get("books", [])
+
+    if rec_data.get("from_cache"):
+        st.caption("💾 Загружено из кэша")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### 🎓 Онлайн-курсы")
+        if courses:
+            for c in courses:
+                title = c.get("title", c.get("url", "Ссылка"))
+                url = c.get("url", "#")
+                st.markdown(
+                    f'<div class="rec-card">📌 <a href="{url}" target="_blank">{title}</a></div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.info("Курсы не найдены")
+
+    with col2:
+        st.markdown("### 📚 Книги")
+        if books:
+            for b in books:
+                title = b.get("title", b.get("url", "Ссылка"))
+                url = b.get("url", "#")
+                st.markdown(
+                    f'<div class="rec-card">📖 <a href="{url}" target="_blank">{title}</a></div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.info("Книги не найдены")
+
+
+# ─── Sidebar ─────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3064/3064197.png", width=80)
@@ -107,6 +172,10 @@ with st.sidebar:
     except:
         st.error("API: Offline")
 
+
+# ═══════════════════════════════════════════════════════════════════
+#  PAGE: Generate
+# ═══════════════════════════════════════════════════════════════════
 if st.session_state.page == "Generate":
     st.title("✨ Создать новый подкаст")
     st.write("Вставьте ссылку на YouTube видео, и наш ИИ превратит его в увлекательный подкаст.")
@@ -114,6 +183,9 @@ if st.session_state.page == "Generate":
     url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=...")
 
     if st.button("🚀 Начать магию", disabled=not url):
+        # Clear previous result
+        st.session_state.last_result = None
+
         with st.status("🔮 Работаем над вашим видео...", expanded=True) as status:
             st.write("🔍 Извлекаем транскрипт и классифицируем видео...")
 
@@ -126,94 +198,113 @@ if st.session_state.page == "Generate":
 
                 if response.status_code == 200:
                     data = response.json()
-
-                    # ── Classification badge ──
-                    cat = data.get("video_category", "unknown")
-                    cat_label = CATEGORY_LABELS.get(cat, cat)
-
-                    # ── Rejected? ──
-                    if data.get("rejected"):
-                        status.update(
-                            label="🚫 Видео отклонено классификатором",
-                            state="error",
-                            expanded=False,
-                        )
-                        st.markdown(
-                            f'<div class="reject-card">'
-                            f"<h3>🚫 Видео не подходит для обработки</h3>"
-                            f"<p><b>Категория:</b> {cat_label}</p>"
-                            f"<p><b>Причина:</b> {data.get('classification_reason', '—')}</p>"
-                            f"<p>Пожалуйста, выберите образовательное видео "
-                            f"(лекция, туториал, курс).</p>"
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        status.update(
-                            label="✅ Готово! Текст сохранён в кэш.",
-                            state="complete",
-                            expanded=False,
-                        )
-
-                        # Classification info
-                        st.markdown(
-                            f'<span class="category-badge">{cat_label}</span>',
-                            unsafe_allow_html=True,
-                        )
-
-                        t1, t2, t3, t4 = st.tabs(
-                            ["📝 Конспект", "🎬 Скрипт", "🎙️ Аудио", "💬 Чат с видео"]
-                        )
-
-                        with t1:
-                            st.markdown(data["summary"])
-                            st.write("---")
-                            st.write("**Ключевые слова:**")
-                            st.write(", ".join(data["keywords"]))
-
-                        with t2:
-                            st.text_area(
-                                "Сценарий диалога",
-                                data["podcast_script"],
-                                height=400,
-                            )
-
-                            st.caption(f"Кэш: {'Использован' if data['cache_hit'] else 'Создан заново'}")
-
-                        with t4:
-                            st.subheader("💬 Спроси что-нибудь у этого видео")
-                            if "chat_history" not in st.session_state:
-                                st.session_state.chat_history = {}
-                            
-                            v_id = data['video_id']
-                            if v_id not in st.session_state.chat_history:
-                                st.session_state.chat_history[v_id] = []
-                            
-                            # Показываем историю
-                            for chat in st.session_state.chat_history[v_id]:
-                                with st.chat_message("user"):
-                                    st.write(chat["question"])
-                                with st.chat_message("assistant"):
-                                    st.write(chat["answer"])
-                                    if chat.get("sources"):
-                                        with st.expander("Источники"):
-                                            for s in chat["sources"]:
-                                                st.markdown(f"- [{s['timestamp']}]({s['url']})")
-
-                            # Поле ввода
-                            if q := st.chat_input("Напр.: О чем говорилось на 15-й минуте?"):
-                                st.session_state.chat_history[v_id].append({"question": q, "answer": "..."})
-                                with st.spinner("Думаю..."):
-                                    ans = ask_question(v_id, q)
-                                    if ans:
-                                        st.session_state.chat_history[v_id][-1]["answer"] = ans["answer"]
-                                        st.session_state.chat_history[v_id][-1]["sources"] = ans["sources"]
-                                        st.rerun()
-
+                    st.session_state.last_result = data
+                    status.update(
+                        label="✅ Готово!",
+                        state="complete",
+                        expanded=False,
+                    )
                 else:
-                    st.error(f"Ошибка сервера: {response.text}")
+                    status.update(label="❌ Ошибка API", state="error", expanded=False)
+                    st.error(f"Ошибка API: {response.status_code} — {response.text}")
             except Exception as e:
+                status.update(label="❌ Ошибка", state="error", expanded=False)
                 st.error(f"Произошла ошибка: {str(e)}")
+
+    # ── Display results from session state (persists across reruns) ──
+    data = st.session_state.last_result
+    if data:
+        cat = data.get("video_category", "unknown")
+        cat_label = CATEGORY_LABELS.get(cat, cat)
+
+        if data.get("rejected"):
+            st.markdown(
+                f'<div class="reject-card">'
+                f"<h3>🚫 Видео не подходит для обработки</h3>"
+                f"<p><b>Категория:</b> {cat_label}</p>"
+                f"<p><b>Причина:</b> {data.get('classification_reason', '—')}</p>"
+                f"<p>Пожалуйста, выберите образовательное видео "
+                f"(лекция, туториал, курс).</p>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                f'<span class="category-badge">{cat_label}</span>',
+                unsafe_allow_html=True,
+            )
+
+            t1, t2, t3, t4 = st.tabs(
+                ["📝 Конспект", "🎬 Скрипт", "🎙️ Аудио", "🎯 Рекомендации"]
+            )
+
+            with t1:
+                st.markdown(data.get("summary", ""))
+                st.write("---")
+                st.write("**Ключевые слова:**")
+                st.write(", ".join(data.get("keywords", [])))
+
+            with t2:
+                st.text_area(
+                    "Сценарий диалога",
+                    data.get("podcast_script", ""),
+                    height=400,
+                )
+                st.caption(f"Кэш: {'Использован' if data.get('cache_hit') else 'Создан заново'}")
+
+            with t3:
+                st.subheader("🎙️ Аудио подкаст")
+                video_id = data.get("video_id", "")
+                audio_resp = requests.get(f"{API_URL}/videos/{video_id}/audio")
+                if audio_resp.status_code == 200:
+                    st.audio(f"{API_URL}/videos/{video_id}/audio")
+                else:
+                    st.info("🎙️ Аудио ещё не сгенерировано.")
+                    if st.button("Создать аудио", key=f"gen_audio_{video_id}"):
+                        with st.spinner("Генерирую..."):
+                            r = requests.post(f"{API_URL}/videos/{video_id}/audio", timeout=300)
+                            if r.status_code == 200:
+                                st.success("✅ Аудио готово!")
+                                st.rerun()
+                            else:
+                                st.error(r.text)
+
+            with t4:
+                st.subheader("🎯 Рекомендации по теме")
+                video_id = data.get("video_id", "")
+
+                # Check recommendations from session state (updated after generation or fetch)
+                rec = (st.session_state.last_result or {}).get("recommendation")
+                has_recs = rec and (rec.get("courses") or rec.get("books"))
+
+                if not has_recs:
+                    st.info("Рекомендации ещё не сгенерированы для этого видео.")
+                    if st.button("🔍 Сгенерировать рекомендации", key=f"btn_rec_gen_{video_id}", use_container_width=True):
+                        with st.status("🔍 Генерация рекомендаций...", expanded=True) as rec_status:
+                            st.write("🕵️ Анализируем контекст видео...")
+                            time.sleep(0.5)
+                            st.write("🌐 Ищем релевантные курсы и книги...")
+
+                            rec_result = get_recommendations(video_id)
+
+                            if rec_result and (rec_result.get("courses") or rec_result.get("books")):
+                                st.write("✨ Готово!")
+                                rec_status.update(label="✅ Рекомендации найдены!", state="complete", expanded=False)
+                                # Save to session state
+                                st.session_state.last_result["recommendation"] = {
+                                    "courses": rec_result.get("courses", []),
+                                    "books": rec_result.get("books", []),
+                                }
+                                # Render inline immediately
+                                render_recommendations(rec_result)
+                            else:
+                                rec_status.update(label="❌ Ошибка", state="error", expanded=False)
+                                st.error("Не удалось получить рекомендации. Попробуйте позже.")
+                else:
+                    render_recommendations(rec)
+
+            st.divider()
+
 
 # ═══════════════════════════════════════════════════════════════════
 #  PAGE: Library
@@ -244,51 +335,91 @@ elif st.session_state.page == "Library":
                     )
 
                 if cols[2].button("👁️", key=f"view_{video_id}"):
-                    details = get_video_details(video_id)
-                    if details:
-                        with st.expander("Детали видео", expanded=True):
-                            audio_resp = requests.get(f"{API_URL}/videos/{video_id}/audio")
-                            if audio_resp.status_code == 200:
-                                st.audio(f"{API_URL}/videos/{video_id}/audio")
-                            else:
-                                st.info("🎙️ Аудио ещё не сгенерировано.")
-                                if st.button("Создать аудио", key=f"gen_{video_id}"):
-                                    with st.spinner("Генерирую..."):
-                                        r = requests.post(f"{API_URL}/videos/{video_id}/audio", timeout=300)
-                                        if r.status_code == 200:
-                                            st.success("✅ Аудио готово!")
-                                            st.rerun()
-                                        else:
-                                            st.error(r.text)
-                            st.markdown(details["summary"])
-                            
-                            st.divider()
-                            st.subheader("💬 Чат с видео")
-                            v_id = video_id
-                            if "chat_history" not in st.session_state:
-                                st.session_state.chat_history = {}
-                            if v_id not in st.session_state.chat_history:
-                                st.session_state.chat_history[v_id] = []
-                            
-                            for chat in st.session_state.chat_history[v_id]:
-                                st.markdown(f"**Вы:** {chat['question']}")
-                                st.markdown(f"**Ассистент:** {chat['answer']}")
-                            
-                            q_lib = st.text_input("Задать вопрос", key=f"q_{v_id}")
-                            if st.button("Спросить", key=f"btn_q_{v_id}"):
-                                with st.spinner("Поиск ответа..."):
-                                    ans = ask_question(v_id, q_lib)
-                                    if ans:
-                                        st.session_state.chat_history[v_id].append({
-                                            "question": q_lib, 
-                                            "answer": ans["answer"]
-                                        })
-                                        st.rerun()
+                    st.session_state.selected_library_video = video_id
 
                 if cols[3].button("🗑️", key=f"del_{video_id}"):
                     if delete_video(video_id):
                         st.toast(f"Видео {video_id} удалено")
+                        if st.session_state.selected_library_video == video_id:
+                            st.session_state.selected_library_video = None
                         st.rerun()
+
+        # ── Detail panel for selected video ──
+        sel_id = st.session_state.selected_library_video
+        if sel_id:
+            st.divider()
+            details = get_video_details(sel_id)
+            if details:
+                st.subheader(f"📋 Детали: {sel_id}")
+
+                lib_t1, lib_t2, lib_t3, lib_t4 = st.tabs(
+                    ["📝 Конспект", "🎬 Скрипт", "🎙️ Аудио", "🎯 Рекомендации"]
+                )
+
+                with lib_t1:
+                    st.markdown(details.get("summary", ""))
+                    kw = details.get("keywords", [])
+                    if kw:
+                        st.write("---")
+                        st.write("**Ключевые слова:**")
+                        st.write(", ".join(kw))
+
+                with lib_t2:
+                    st.text_area(
+                        "Сценарий диалога",
+                        details.get("podcast_script", ""),
+                        height=400,
+                        key=f"lib_script_{sel_id}",
+                    )
+
+                with lib_t3:
+                    audio_resp = requests.get(f"{API_URL}/videos/{sel_id}/audio")
+                    if audio_resp.status_code == 200:
+                        st.audio(f"{API_URL}/videos/{sel_id}/audio")
+                    else:
+                        st.info("🎙️ Аудио ещё не сгенерировано.")
+                        if st.button("Создать аудио", key=f"lib_gen_audio_{sel_id}"):
+                            with st.spinner("Генерирую..."):
+                                r = requests.post(f"{API_URL}/videos/{sel_id}/audio", timeout=300)
+                                if r.status_code == 200:
+                                    st.success("✅ Аудио готово!")
+                                    st.rerun()
+                                else:
+                                    st.error(r.text)
+
+                with lib_t4:
+                    st.subheader("🎯 Рекомендации")
+
+                    # Check cache key for this video's recommendations
+                    rec_cache_key = f"lib_rec_{sel_id}"
+                    if rec_cache_key not in st.session_state:
+                        st.session_state[rec_cache_key] = None
+
+                    cached_rec = st.session_state[rec_cache_key]
+
+                    if cached_rec and (cached_rec.get("courses") or cached_rec.get("books")):
+                        render_recommendations(cached_rec)
+                    else:
+                        if st.button("🔍 Загрузить рекомендации", key=f"btn_rec_lib_{sel_id}", use_container_width=True):
+                            with st.status("🔍 Генерация рекомендаций...", expanded=True) as lib_rec_status:
+                                st.write("🕵️ Анализируем контекст видео...")
+                                time.sleep(0.5)
+                                st.write("🌐 Ищем релевантные курсы и книги...")
+
+                                rec_result = get_recommendations(sel_id)
+
+                                if rec_result and (rec_result.get("courses") or rec_result.get("books")):
+                                    st.write("✨ Готово!")
+                                    lib_rec_status.update(label="✅ Рекомендации найдены!", state="complete", expanded=False)
+                                    st.session_state[rec_cache_key] = rec_result
+                                    # Render inline immediately
+                                    render_recommendations(rec_result)
+                                else:
+                                    lib_rec_status.update(label="❌ Ошибка", state="error", expanded=False)
+                                    st.error("Не удалось получить рекомендации.")
+            else:
+                st.warning(f"Видео {sel_id} не найдено в кэше.")
+                st.session_state.selected_library_video = None
 
 # ═══════════════════════════════════════════════════════════════════
 #  PAGE: Settings

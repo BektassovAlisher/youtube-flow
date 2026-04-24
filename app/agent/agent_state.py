@@ -28,8 +28,9 @@ class GraphState(TypedDict):
     classification_reason: str
     classification_confidence: float
     skip_audio: bool  
-    segments: List[Any] = [] # сырые сегменты транскрипта для RAG
-    vector_index_status: str = "" # статус индексации в Chroma
+    segments: List[Any]
+    vector_index_status: str
+    recommendation: dict
 
 
 def extract_text(result) -> str:

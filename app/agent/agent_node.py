@@ -10,7 +10,8 @@ from agent.agent import (
     audio_node, 
     cache_node, 
     save_to_db_node,
-    rag_index_node, # добавленный узел
+    rag_index_node, 
+    recommend_node,
     GraphState,
     route_classify,
     route_cache,
@@ -20,30 +21,32 @@ from agent.agent import (
 
 from langgraph.graph import StateGraph, START, END
 
+
+def start_pipeline_node(state: GraphState):
+    return {}
+
+
 agent = StateGraph(GraphState)
 
 agent.add_node("extract_transcript", extract_transcript)
 agent.add_node("classify", classify_node)
-agent.add_node("rag_index", rag_index_node) # добавленный узел
+agent.add_node("rag_index", rag_index_node)
 agent.add_node("reject", reject_node)
+agent.add_node("cache_node", cache_node)
+agent.add_node("start_pipeline", start_pipeline_node)
 agent.add_node("summarize", summarize_node)
 agent.add_node("keywords", keyword_node)
-agent.add_node("merge", merge_node)       
+agent.add_node("merge", merge_node)
 agent.add_node("script", script_node)
-agent.add_node("audio", audio_node)
 agent.add_node("critic", critic_node)
-agent.add_node("cache_node", cache_node)
 agent.add_node("save_to_db", save_to_db_node)
-
-# ── рёбра ─────────────────────────────────────────────────────────
+agent.add_node("audio", audio_node)
+agent.add_node("recommend", recommend_node)
 
 agent.add_edge(START, "extract_transcript")
 
-# Запускаем классификацию и индексацию параллельно
 agent.add_edge("extract_transcript", "classify")
 agent.add_edge("extract_transcript", "rag_index")
-
-# Ветка индексации заканчивается здесь
 agent.add_edge("rag_index", END)
 
 agent.add_conditional_edges(
@@ -51,7 +54,7 @@ agent.add_conditional_edges(
     route_classify,
     {
         "cache_node": "cache_node",
-        "reject": "reject"
+        "reject": "reject",
     }
 )
 
@@ -61,24 +64,27 @@ agent.add_conditional_edges(
     "cache_node",
     route_cache,
     {
+        "start_pipeline": "start_pipeline",
         "audio": "audio",
-        "summarize": "summarize",
-        "keywords": "keywords",
         "end": END,
     }
 )
 
-agent.add_edge("summarize", "merge")      
-agent.add_edge("keywords", "merge")        
-agent.add_edge("merge", "script")          
+agent.add_edge("start_pipeline", "summarize")
+agent.add_edge("start_pipeline", "keywords")
+
+agent.add_edge("summarize", "merge")
+agent.add_edge("keywords", "recommend")
+agent.add_edge("recommend", "merge")
+agent.add_edge("merge", "script")
 agent.add_edge("script", "critic")
 
 agent.add_conditional_edges(
     "critic",
     route_critic,
     {
-        "audio": "save_to_db",   
-        "script": "script" 
+        "save_to_db": "save_to_db",
+        "script": "script",
     }
 )
 
@@ -87,11 +93,12 @@ agent.add_conditional_edges(
     route_post_save,
     {
         "audio": "audio",
-        "end": END,
+        "end":   END,
     }
 )
 
-agent.add_edge("audio", END)
+agent.add_edge("audio",  END)
+
 
 app = agent.compile()
 
@@ -99,12 +106,12 @@ if __name__ == "__main__":
     print("🚀 Запуск мультиагентной системы...")
     data = {
         "video_url": "https://www.youtube.com/watch?v=22tkx79icy4",
-        "retry_count": 0,       
-        "max_retries": 2,       
-        "critic_feedback": "",   
+        "retry_count": 0,
+        "max_retries": 2,
+        "critic_feedback": "",
         "is_valid": False,
         "is_suitable": False,
-        "cache_hit": False,       
+        "cache_hit": False,
         "agent_execution_order": [],
         "skip_audio": True,
     }

@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Text, Float, DateTime, ForeignKey, Integer, LargeBinary
+from sqlalchemy import create_engine, Column, Text, Float, DateTime, ForeignKey, Integer, LargeBinary, JSON
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from dotenv import load_dotenv
@@ -15,6 +15,7 @@ Base = declarative_base()
 class Video(Base):
     __tablename__ = "videos"
     video_id     = Column(Text, primary_key=True)
+    title        = Column(Text)
     url          = Column(Text, nullable=False)
     language     = Column(Text)
     duration_sec = Column(Float)
@@ -50,6 +51,14 @@ class PodcastAudio(Base):
     id         = Column(Integer, primary_key=True, autoincrement=True)
     video_id   = Column(Text, ForeignKey("videos.video_id"), nullable=False, unique=True)
     audio_data = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Recommendation(Base):
+    __tablename__ = "recommendations"
+    id         = Column(Integer, primary_key=True, autoincrement=True)
+    video_id   = Column(Text, ForeignKey("videos.video_id"), nullable=False, unique=True)
+    data       = Column(JSON, nullable=False)   # {"courses": [...], "books": [...]}
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
