@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from .database import SessionLocal, Video, Summary, Keyword, PodcastScript, PodcastAudio, Recommendation
+from agent.chat_agent.rag import delete_video_index
 
 
 
@@ -7,13 +8,16 @@ def is_expired(created_at: datetime, days: int = 7) -> bool:
     return datetime.utcnow() - created_at > timedelta(days=days)
 
 
-def _delete_children(session, video_id: str):
+def _delete_children(session, video_id: str, delete_index: bool = True):
    
     session.query(Summary).filter(Summary.video_id == video_id).delete()
     session.query(Keyword).filter(Keyword.video_id == video_id).delete()
     session.query(PodcastScript).filter(PodcastScript.video_id == video_id).delete()
     session.query(PodcastAudio).filter(PodcastAudio.video_id == video_id).delete()
     session.query(Recommendation).filter(Recommendation.video_id == video_id).delete()
+    
+    if delete_index:
+        delete_video_index(video_id)
 
 
 def get_cached_video(video_id: str, ttl_days: int = 7) -> dict | None:
@@ -92,7 +96,7 @@ def save_to_cache(
             category=category,
         ))
 
-        _delete_children(session, video_id)
+        _delete_children(session, video_id, delete_index=False)
         session.flush()
 
         session.add(Summary(video_id=video_id, content=summary))

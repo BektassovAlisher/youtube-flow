@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import os
 
 load_dotenv()
-llm = ChatGoogleGenerativeAI(model="gemini-3-flash-preview", api_key=os.getenv("GOOGLE_API_KEY"))
+llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", api_key=os.getenv("GOOGLE_API_KEY"))
 llm2 = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
 
 class GraphState(TypedDict):
@@ -29,6 +29,7 @@ class GraphState(TypedDict):
     classification_confidence: float
     skip_audio: bool  
     segments: List[Any]
+    documents: List[Any]
     vector_index_status: str
     recommendation: dict
 

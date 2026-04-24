@@ -40,6 +40,17 @@ class YoutubeExtractTool:
         print("🎬 Агент 1: Получаю транскрипт...")
 
         video_id = self.extract_video_id(video_url)
+        
+        title = f"Video {video_id}"
+        try:
+            import requests
+            r = requests.get(video_url, timeout=5)
+            if r.status_code == 200:
+                match = re.search(r"<title>(.*?)</title>", r.text)
+                if match:
+                    title = match.group(1).replace(" - YouTube", "").strip()
+        except:
+            pass
 
         ytt_api = YouTubeTranscriptApi()
         transcript = ytt_api.fetch(video_id, languages=self.languages)
@@ -52,6 +63,7 @@ class YoutubeExtractTool:
 
         metadata = {
             "video_id": video_id,
+            "title": title,
             "video_url": video_url,
             "language": detected_language,
             "total_duration_sec": total_duration,

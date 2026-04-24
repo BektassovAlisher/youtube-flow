@@ -111,6 +111,15 @@ def get_recommendations(video_id):
         print(f"Recommendations error: {e}")
         return None
 
+def ask_question(video_id, question):
+    try:
+        r = requests.post(f"{API_URL}/videos/{video_id}/qa", json={"question": question}, timeout=120)
+        return r.json() if r.status_code == 200 else None
+    except Exception as e:
+        print(f"QA error: {e}")
+        return None
+
+
 
 # ─── Reusable UI components ──────────────────────────────────────────────────
 
@@ -234,8 +243,8 @@ if st.session_state.page == "Generate":
                 unsafe_allow_html=True,
             )
 
-            t1, t2, t3, t4 = st.tabs(
-                ["📝 Конспект", "🎬 Скрипт", "🎙️ Аудио", "🎯 Рекомендации"]
+            t1, t2, t3, t4, t5 = st.tabs(
+                ["📝 Конспект", "🎬 Скрипт", "🎙️ Аудио", "🎯 Рекомендации", "💬 Спросить"]
             )
 
             with t1:
@@ -302,6 +311,46 @@ if st.session_state.page == "Generate":
                                 st.error("Не удалось получить рекомендации. Попробуйте позже.")
                 else:
                     render_recommendations(rec)
+                    
+            with t5:
+                st.subheader("💬 Задать вопрос по видео")
+                video_id = data.get("video_id", "")
+                
+                chat_history_key = f"chat_{video_id}"
+                if chat_history_key not in st.session_state:
+                    st.session_state[chat_history_key] = []
+                    
+                chat_container = st.container(height=400, border=False)
+                for msg in st.session_state[chat_history_key]:
+                    with chat_container.chat_message(msg["role"]):
+                        st.write(msg["content"])
+                        if "sources" in msg and msg["sources"]:
+                            with st.expander("Источники"):
+                                for s in msg["sources"]:
+                                    st.write(f"- [{s['timestamp']}]({s['url']})")
+
+                prompt = st.chat_input("Спросите что-нибудь по видео...", key=f"chat_input_{video_id}")
+                if prompt:
+                    st.session_state[chat_history_key].append({"role": "user", "content": prompt})
+                    with chat_container.chat_message("user"):
+                        st.write(prompt)
+                    
+                    with chat_container.chat_message("assistant"):
+                        with st.spinner("Ищу ответ..."):
+                            ans = ask_question(video_id, prompt)
+                            if ans:
+                                st.write(ans["answer"])
+                                if ans.get("sources"):
+                                    with st.expander("Источники"):
+                                        for s in ans["sources"]:
+                                            st.write(f"- [{s['timestamp']}]({s['url']})")
+                                st.session_state[chat_history_key].append({
+                                    "role": "assistant", 
+                                    "content": ans["answer"],
+                                    "sources": ans.get("sources", [])
+                                })
+                            else:
+                                st.error("Не удалось получить ответ.")
 
             st.divider()
 
@@ -352,8 +401,8 @@ elif st.session_state.page == "Library":
             if details:
                 st.subheader(f"📋 Детали: {sel_id}")
 
-                lib_t1, lib_t2, lib_t3, lib_t4 = st.tabs(
-                    ["📝 Конспект", "🎬 Скрипт", "🎙️ Аудио", "🎯 Рекомендации"]
+                lib_t1, lib_t2, lib_t3, lib_t4, lib_t5 = st.tabs(
+                    ["📝 Конспект", "🎬 Скрипт", "🎙️ Аудио", "🎯 Рекомендации", "💬 Спросить"]
                 )
 
                 with lib_t1:
@@ -417,6 +466,45 @@ elif st.session_state.page == "Library":
                                 else:
                                     lib_rec_status.update(label="❌ Ошибка", state="error", expanded=False)
                                     st.error("Не удалось получить рекомендации.")
+                                    
+                with lib_t5:
+                    st.subheader("💬 Задать вопрос по видео")
+                    
+                    chat_history_key = f"lib_chat_{sel_id}"
+                    if chat_history_key not in st.session_state:
+                        st.session_state[chat_history_key] = []
+                        
+                    chat_container = st.container(height=400, border=False)
+                    for msg in st.session_state[chat_history_key]:
+                        with chat_container.chat_message(msg["role"]):
+                            st.write(msg["content"])
+                            if "sources" in msg and msg["sources"]:
+                                with st.expander("Источники"):
+                                    for s in msg["sources"]:
+                                        st.write(f"- [{s['timestamp']}]({s['url']})")
+
+                    prompt = st.chat_input("Спросите что-нибудь по видео...", key=f"lib_chat_input_{sel_id}")
+                    if prompt:
+                        st.session_state[chat_history_key].append({"role": "user", "content": prompt})
+                        with chat_container.chat_message("user"):
+                            st.write(prompt)
+                        
+                        with chat_container.chat_message("assistant"):
+                            with st.spinner("Ищу ответ..."):
+                                ans = ask_question(sel_id, prompt)
+                                if ans:
+                                    st.write(ans["answer"])
+                                    if ans.get("sources"):
+                                        with st.expander("Источники"):
+                                            for s in ans["sources"]:
+                                                st.write(f"- [{s['timestamp']}]({s['url']})")
+                                    st.session_state[chat_history_key].append({
+                                        "role": "assistant", 
+                                        "content": ans["answer"],
+                                        "sources": ans.get("sources", [])
+                                    })
+                                else:
+                                    st.error("Не удалось получить ответ.")
             else:
                 st.warning(f"Видео {sel_id} не найдено в кэше.")
                 st.session_state.selected_library_video = None

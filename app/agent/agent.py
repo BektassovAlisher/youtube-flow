@@ -14,7 +14,7 @@ from db.cache import (
     get_cached_audio, save_audio_to_cache,
     get_cached_recommendation, save_recommendation_to_cache,
 )
-from db.chroma.vector_store import rag_store
+from agent.chat_agent.rag import index_video, ask
 from agent.agent_state import GraphState, extract_text, llm, llm2
 from langchain_tavily import TavilySearch
 
@@ -26,9 +26,11 @@ def extract_transcript(state: GraphState):
     chunking = ChukingTranscript()
     text = extractor.process_video(state["video_url"])
     splitted_text = chunking.to_timestamped_text(text.segments)
+    documents = chunking.split(text.segments, text.metadata["video_id"])
     return {"transcript": splitted_text,
             "video_metadata": text.metadata,
-            "segments": text.segments
+            "segments": text.segments,
+            "documents": documents
             }
     
 
@@ -367,7 +369,6 @@ def save_to_db_node(state: GraphState):
         category=state.get("video_category", "unknown"),
     )
 
-    # Also persist recommendations if they were generated
     rec = state.get("recommendation")
     if rec:
         save_recommendation_to_cache(meta["video_id"], rec)
@@ -402,43 +403,13 @@ def rag_index_node(state: GraphState):
     chunker = ChukingTranscript()
     chunks = chunker.split(segments, video_id)
     
-    rag_store.add_documents(chunks, video_id)
+    index_video(video_id, chunks)
     
     return {"vector_index_status": f"indexed_{len(chunks)}_chunks"}
 
 
 def qa_agent(video_id: str, question: str):
-    docs = rag_store.search(question, video_id, k=5)
-    
-    context_parts = []
-    sources = []
-    for d in docs:
-        ts = d.metadata.get("timestamp", "00:00")
-        url = d.metadata.get("youtube_url", "")
-        context_parts.append(f"[{ts}] {d.page_content}")
-        sources.append({"timestamp": ts, "url": url})
-        
-    context = "\n\n".join(context_parts)
-    
-    prompt = f"""Ты — ассистент по вопросам к видео-лекциям. 
-Используй предоставленный контекст из транскрипта, чтобы ответить на вопрос.
-
----КОНТЕКСТ---
-{context}
----КОНЕЦ КОНТЕКСТА---
-
-Вопрос: {question}
-
-Если в контексте нет ответа, так и скажи. Не придумывай факты.
-Отвечай на языке вопроса.
-В конце ответа добавь ссылки на таймстампы из контекста, если они помогли ответить.
-"""
-
-    result = llm.invoke(prompt)
-    return {
-        "answer": extract_text(result),
-        "sources": sources
-    }
+    return ask(video_id, question)
 
 
 def recommend_node(state: GraphState):
