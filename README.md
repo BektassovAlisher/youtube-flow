@@ -81,7 +81,7 @@ START
 | Компонент | Технология |
 |---|---|
 | **Оркестрация агентов** | LangGraph (StateGraph) |
-| **LLM** | Google Gemini 3.1 Flash Lite, Groq (Llama 3.3 70B, Llama 4 Scout, Qwen3 32B) |
+| **LLM** | Google Gemini 3.1 Flash Lite, Groq (Llama 3.3 70B) |
 | **Векторная БД** | ChromaDB + HuggingFace Embeddings (`paraphrase-multilingual-MiniLM-L12-v2`) |
 | **Гибридный поиск** | ChromaDB (семантический) + BM25 (лексический) + Reciprocal Rank Fusion |
 | **Генерация аудио** | ElevenLabs API (`eleven_multilingual_v2`) |
@@ -335,4 +335,5 @@ curl -X POST http://localhost:8000/videos/VIDEO_ID/recommend
 ---
 
 ## 👤 Автор
+- Alisher Manetti
 
