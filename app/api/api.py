@@ -18,11 +18,9 @@ app = FastAPI(
 )
 
 
-# ─── Request / Response models ───────────────────────────────────────────────
-
 class GenerateRequest(BaseModel):
     video_url: str
-    skip_audio: bool = False  # True → только текст, аудио можно сгенерировать позже
+    skip_audio: bool = False
 
 
 class GenerateResponse(BaseModel):
@@ -84,8 +82,6 @@ class RecommendResponse(BaseModel):
     from_cache: bool
 
 
-# ─── Endpoints ───────────────────────────────────────────────────────────────
-
 @app.post("/generate", response_model=GenerateResponse)
 def generate_podcast(req: GenerateRequest):
     try:
@@ -141,7 +137,6 @@ def generate_podcast(req: GenerateRequest):
 
 @app.post("/videos/{video_id}/qa", response_model=QAResponse)
 def ask_video_question(video_id: str, req: QARequest):
-    """Ответ на вопросы по конкретному видео через RAG."""
     try:
         cached = get_cached_video(video_id)
         if not cached:
@@ -161,12 +156,9 @@ def ask_video_question(video_id: str, req: QARequest):
 
 @app.post("/videos/{video_id}/recommend", response_model=RecommendResponse)
 def get_recommendations(video_id: str):
-    """Получает рекомендации курсов и книг для видео. Использует кэш если есть."""
     cached = get_cached_video(video_id)
     if not cached:
         raise HTTPException(status_code=404, detail="Видео не найдено. Сначала запустите /generate.")
-
-    # Return from cache if already computed
     cached_rec = get_cached_recommendation(video_id)
     if cached_rec:
         return RecommendResponse(
@@ -176,7 +168,6 @@ def get_recommendations(video_id: str):
             from_cache=True,
         )
 
-    # Build a minimal state and call recommend_node directly
     state = {
         "video_metadata": {
             "video_id": video_id,

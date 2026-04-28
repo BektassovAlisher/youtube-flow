@@ -1,6 +1,7 @@
 langgraph
 langchain
 langchain-ollama
+langchain-chroma
 langchain-google-genai
 elevenlabs
 pydantic
@@ -14,3 +15,8 @@ langchain-groq
 fastapi
 fastapi[standard]
 streamlit 
+langchain-tavily    
+rank-bm25
+langchain-huggingface
+langchain-community
+sentence-transformers

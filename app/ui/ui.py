@@ -1,8 +1,9 @@
 import streamlit as st
 import requests
 import time
+import os
 
-API_URL = "http://127.0.0.1:8000"
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 
 CATEGORY_LABELS = {
     "educational": "📚 Образование",
@@ -220,7 +221,6 @@ if st.session_state.page == "Generate":
                 status.update(label="❌ Ошибка", state="error", expanded=False)
                 st.error(f"Произошла ошибка: {str(e)}")
 
-    # ── Display results from session state (persists across reruns) ──
     data = st.session_state.last_result
     if data:
         cat = data.get("video_category", "unknown")
@@ -509,9 +509,6 @@ elif st.session_state.page == "Library":
                 st.warning(f"Видео {sel_id} не найдено в кэше.")
                 st.session_state.selected_library_video = None
 
-# ═══════════════════════════════════════════════════════════════════
-#  PAGE: Settings
-# ═══════════════════════════════════════════════════════════════════
 elif st.session_state.page == "Settings":
     st.title("⚙️ Настройки")
 

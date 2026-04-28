@@ -115,9 +115,14 @@ def save_to_cache(
 
 
 def save_recommendation_to_cache(video_id: str, recommendation: dict):
-    """Upsert recommendation {courses, books} for a video."""
     session = SessionLocal()
     try:
+        # Guard: recommendation has a FK on videos.video_id
+        video_exists = session.query(Video).filter(Video.video_id == video_id).first()
+        if not video_exists:
+            print(f"⚠️ Нельзя сохранить рекомендации: видео {video_id} не найдено в таблице videos")
+            return
+
         existing = session.query(Recommendation).filter(
             Recommendation.video_id == video_id
         ).first()

@@ -7,7 +7,16 @@ import os
 
 load_dotenv()
 llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", api_key=os.getenv("GOOGLE_API_KEY"))
-llm2 = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
+
+
+llm1 = ChatGroq(model="openai/gpt-oss-120b", api_key=os.getenv("GROQ_API_KEY"))
+
+llm2 = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, api_key=os.getenv("GROQ_API_KEY"))
+
+
+llm3 = ChatGroq(model="qwen/qwen3:32b", api_key=os.getenv("GROQ_API_KEY"))
+
+llm4 = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct", api_key=os.getenv("GROQ_API_KEY"))
 
 class GraphState(TypedDict):
     video_url: str

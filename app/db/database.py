@@ -14,51 +14,51 @@ Base = declarative_base()
 
 class Video(Base):
     __tablename__ = "videos"
-    video_id     = Column(Text, primary_key=True)
-    title        = Column(Text)
-    url          = Column(Text, nullable=False)
-    language     = Column(Text)
+    video_id = Column(Text, primary_key=True)
+    title = Column(Text)
+    url = Column(Text, nullable=False)
+    language = Column(Text)
     duration_sec = Column(Float)
-    category     = Column(Text)
-    created_at   = Column(DateTime, default=datetime.utcnow)
+    category = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Summary(Base):
     __tablename__ = "summaries"
-    id         = Column(Integer, primary_key=True, autoincrement=True)
-    video_id   = Column(Text, ForeignKey("videos.video_id"), nullable=False)
-    content    = Column(Text, nullable=False)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    video_id = Column(Text, ForeignKey("videos.video_id"), nullable=False)
+    content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Keyword(Base):
     __tablename__ = "keywords"
-    id       = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
     video_id = Column(Text, ForeignKey("videos.video_id"), nullable=False)
-    keyword  = Column(Text, nullable=False)
+    keyword = Column(Text, nullable=False)
 
 
 class PodcastScript(Base):
     __tablename__ = "podcast_scripts"
-    id         = Column(Integer, primary_key=True, autoincrement=True)
-    video_id   = Column(Text, ForeignKey("videos.video_id"), nullable=False)
-    script     = Column(Text, nullable=False)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    video_id = Column(Text, ForeignKey("videos.video_id"), nullable=False)
+    script = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class PodcastAudio(Base):
     __tablename__ = "podcast_audio"
-    id         = Column(Integer, primary_key=True, autoincrement=True)
-    video_id   = Column(Text, ForeignKey("videos.video_id"), nullable=False, unique=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    video_id = Column(Text, ForeignKey("videos.video_id"), nullable=False, unique=True)
     audio_data = Column(LargeBinary, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Recommendation(Base):
     __tablename__ = "recommendations"
-    id         = Column(Integer, primary_key=True, autoincrement=True)
-    video_id   = Column(Text, ForeignKey("videos.video_id"), nullable=False, unique=True)
-    data       = Column(JSON, nullable=False)   # {"courses": [...], "books": [...]}
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    video_id = Column(Text, ForeignKey("videos.video_id"), nullable=False, unique=True)
+    data = Column(JSON, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
