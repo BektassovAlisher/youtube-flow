@@ -36,6 +36,17 @@
 | 💾 **Кэширование** | Все результаты сохраняются в PostgreSQL для повторного использования |
 
 ---
+<img width="1440" height="900" alt="Снимок экрана 2026-05-18 в 21 48 23" src="https://github.com/user-attachments/assets/e6eee19c-b99c-412d-9c6d-d4a078534c72" />
+
+<img width="1440" height="900" alt="Снимок экрана 2026-05-18 в 21 48 47" src="https://github.com/user-attachments/assets/05db3937-2b83-4150-b5da-f9f1a8cac17d" />
+
+<img width="1440" height="900" alt="Снимок экрана 2026-05-18 в 21 49 36" src="https://github.com/user-attachments/assets/3edebc10-708e-4f64-aba0-887a4ff50a4c" />
+
+<img width="1440" height="900" alt="Снимок экрана 2026-05-18 в 21 49 53" src="https://github.com/user-attachments/assets/4661b6c0-415b-42ed-891d-88a271ba9d2a" />
+
+<img width="1440" height="900" alt="Снимок экрана 2026-05-18 в 21 50 26" src="https://github.com/user-attachments/assets/3fb9a307-ead7-4392-80b1-932c480e7f13" />
+
+
 
 ## 🏗️ Архитектура
 
