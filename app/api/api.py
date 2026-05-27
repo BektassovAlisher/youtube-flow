@@ -230,7 +230,7 @@ def generate_audio_for_video(video_id: str):
 def list_videos():
     session = SessionLocal()
     try:
-        videos = session.query(Video).all()
+        videos = session.query(Video).order_by(Video.created_at.desc()).all()
         return [
             VideoListItem(
                 video_id=v.video_id,

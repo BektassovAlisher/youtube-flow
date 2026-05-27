@@ -72,10 +72,8 @@ agent.add_conditional_edges(
 
 agent.add_edge("start_pipeline", "summarize")
 agent.add_edge("start_pipeline", "keywords")
-
 agent.add_edge("summarize", "merge")
-agent.add_edge("keywords", "recommend")
-agent.add_edge("recommend", "merge")
+agent.add_edge("keywords", "merge")
 agent.add_edge("merge", "script")
 agent.add_edge("script", "critic")
 

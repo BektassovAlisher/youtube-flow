@@ -7,7 +7,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 import os
 from langchain_ollama import ChatOllama
-from agent.agent_state import llm2
+from agent.agent_state import llama_70b, gemini
+
+import re
 
 CHROMA = "vector_storage/chroma_db"
 
@@ -15,11 +17,28 @@ base_embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 )
 
+
+def _safe_collection_name(video_id: str) -> str:
+    """Sanitise video_id into a valid ChromaDB collection name.
+
+    Rules: 3-512 chars from [a-zA-Z0-9._-], must start & end with [a-zA-Z0-9].
+    """
+    name = re.sub(r"[^a-zA-Z0-9._-]", "_", video_id)
+    name = name.strip("._-") or "vid"
+    if not name[0].isalnum():
+        name = "v" + name
+    if not name[-1].isalnum():
+        name = name + "0"
+    if len(name) < 3:
+        name = name.ljust(3, "0")
+    return name[:512]
+
+
 def get_vector_store(video_id: str) -> Chroma:
     return Chroma(
         persist_directory=CHROMA,
         embedding_function=base_embeddings,
-        collection_name=video_id
+        collection_name=_safe_collection_name(video_id)
     )
 
 def index_video(video_id: str, documents: List[Document]):
@@ -27,7 +46,7 @@ def index_video(video_id: str, documents: List[Document]):
     vector_store = Chroma(
         persist_directory=CHROMA,
         embedding_function=base_embeddings,
-        collection_name=video_id
+        collection_name=_safe_collection_name(video_id)
     )
    
     ids = [f"{video_id}_{i}" for i in range(len(documents))]
@@ -130,7 +149,7 @@ def ask(video_id: str, question: str) -> dict:
    
 
     
-    chain = prompt | llm2 | StrOutputParser()
+    chain = prompt | gemini | StrOutputParser()
     
     answer = chain.invoke({
         "context": context,

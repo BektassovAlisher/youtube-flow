@@ -51,27 +51,31 @@ st.markdown("""
         color: var(--text-color);
     }
     .rec-card {
-        padding: 12px 16px;
-        border-radius: 10px;
-        background-color: var(--secondary-background-color);
-        border: 1px solid var(--border-color);
-        margin-bottom: 8px;
-        transition: transform 0.2s;
+        padding: 14px 18px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.08));
+        border: 1px solid rgba(99,102,241,0.25);
+        margin-bottom: 10px;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.08);
     }
     .rec-card:hover {
-        transform: translateY(-2px);
-        border-color: #6366f1;
+        transform: translateY(-3px);
+        border-color: #8b5cf6;
+        box-shadow: 0 6px 20px rgba(99,102,241,0.25);
+        background: linear-gradient(135deg, rgba(99,102,241,0.18), rgba(139,92,246,0.14));
     }
     .rec-card a {
         color: var(--text-color) !important;
         text-decoration: none;
-        font-weight: 500;
+        font-weight: 600;
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
+        font-size: 0.95rem;
     }
     .rec-card a:hover {
-        color: #6366f1 !important;
+        color: #a78bfa !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -221,14 +225,27 @@ def render_video_details(video_id, data, context="gen"):
     with t4:
         st.subheader("🎯 Рекомендации по теме")
         rec_cache_key = f"{context}_rec_{video_id}"
-        
+        rec_loading_key = f"{context}_rec_loading_{video_id}"
+
         if context == "gen" and data.get("recommendation"):
             if rec_cache_key not in st.session_state:
                 st.session_state[rec_cache_key] = data["recommendation"]
-                
+
         if rec_cache_key not in st.session_state:
             st.session_state[rec_cache_key] = None
 
+        # --- Handle pending recommendation load ---
+        if st.session_state.get(rec_loading_key):
+            st.session_state.pop(rec_loading_key)
+            with st.spinner("🔍 Ищем релевантные курсы и книги..."):
+                rec_result = get_recommendations(video_id)
+            if rec_result and (rec_result.get("courses") or rec_result.get("books")):
+                st.session_state[rec_cache_key] = rec_result
+            else:
+                st.session_state[rec_cache_key] = None
+                st.error("Не удалось получить рекомендации. Попробуйте позже.")
+
+        # --- Render ---
         cached_rec = st.session_state[rec_cache_key]
 
         if cached_rec and (cached_rec.get("courses") or cached_rec.get("books")):
@@ -236,61 +253,64 @@ def render_video_details(video_id, data, context="gen"):
         else:
             if context == "gen" and not data.get("recommendation"):
                 st.info("Рекомендации ещё не сгенерированы для этого видео.")
-                
+
             if st.button("🔍 Загрузить рекомендации", key=f"btn_rec_{context}_{video_id}", use_container_width=True):
-                with st.status("🔍 Поиск рекомендаций...", expanded=True) as rec_status:
-                    st.write("🕵️ Анализируем контекст видео...")
-                    st.write("🌐 Ищем релевантные курсы и книги...")
-                    
-                    rec_result = get_recommendations(video_id)
-                    
-                    if rec_result and (rec_result.get("courses") or rec_result.get("books")):
-                        st.write("✨ Готово!")
-                        rec_status.update(label="✅ Рекомендации найдены!", state="complete", expanded=False)
-                        st.session_state[rec_cache_key] = rec_result
-                        render_recommendations(rec_result)
-                    else:
-                        rec_status.update(label="❌ Ошибка", state="error", expanded=False)
-                        st.error("Не удалось получить рекомендации. Попробуйте позже.")
+                st.session_state[rec_loading_key] = True
+                st.rerun()
 
     with t5:
         st.subheader("💬 Задать вопрос по видео")
-        
+
         chat_history_key = f"{context}_chat_{video_id}"
+        processing_key = f"{context}_chat_processing_{video_id}"
         if chat_history_key not in st.session_state:
             st.session_state[chat_history_key] = []
-            
-        chat_container = st.container(height=400, border=True)
-        for msg in st.session_state[chat_history_key]:
-            with chat_container.chat_message(msg["role"]):
-                st.write(msg["content"])
-                if "sources" in msg and msg["sources"]:
-                    with st.expander("Источники"):
-                        for s in msg["sources"]:
-                            st.write(f"- [{s['timestamp']}]({s['url']})")
 
-        prompt = st.chat_input("Спросите что-нибудь по видео...", key=f"{context}_chat_input_{video_id}")
-        if prompt:
-            st.session_state[chat_history_key].append({"role": "user", "content": prompt})
-            with chat_container.chat_message("user"):
-                st.write(prompt)
-            
-            with chat_container.chat_message("assistant"):
-                with st.spinner("Ищу ответ..."):
-                    ans = ask_question(video_id, prompt)
-                    if ans:
-                        st.write(ans["answer"])
-                        if ans.get("sources"):
-                            with st.expander("Источники"):
-                                for s in ans["sources"]:
-                                    st.write(f"- [{s['timestamp']}]({s['url']})")
-                        st.session_state[chat_history_key].append({
-                            "role": "assistant", 
-                            "content": ans["answer"],
-                            "sources": ans.get("sources", [])
-                        })
-                    else:
-                        st.error("Не удалось получить ответ.")
+        # --- Handle pending question (process BEFORE rendering) ---
+        if st.session_state.get(processing_key):
+            question = st.session_state.pop(processing_key)
+            st.session_state[chat_history_key].append({"role": "user", "content": question})
+            with st.spinner("🔍 Ищу ответ..."):
+                ans = ask_question(video_id, question)
+            if ans:
+                st.session_state[chat_history_key].append({
+                    "role": "assistant",
+                    "content": ans["answer"],
+                    "sources": ans.get("sources", []),
+                })
+            else:
+                st.session_state[chat_history_key].append({
+                    "role": "assistant",
+                    "content": "❌ Не удалось получить ответ. Попробуйте ещё раз.",
+                })
+
+        # --- Render chat history ---
+        chat_container = st.container(height=400, border=True)
+        if st.session_state[chat_history_key]:
+            for msg in st.session_state[chat_history_key]:
+                with chat_container.chat_message(msg["role"]):
+                    st.write(msg["content"])
+                    if msg.get("sources"):
+                        with st.expander("Источники"):
+                            for s in msg["sources"]:
+                                st.write(f"- [{s['timestamp']}]({s['url']})")
+        else:
+            with chat_container:
+                st.info("Задайте вопрос, и ИИ ответит на основе транскрипта видео.")
+
+        # --- Input form (no st.chat_input — it resets tabs on rerun) ---
+        with st.form(key=f"{context}_chat_form_{video_id}", clear_on_submit=True):
+            cols = st.columns([5, 1])
+            with cols[0]:
+                user_input = st.text_input(
+                    "Вопрос", placeholder="Спросите что-нибудь по видео...",
+                    label_visibility="collapsed",
+                )
+            with cols[1]:
+                submitted = st.form_submit_button("📤", use_container_width=True)
+            if submitted and user_input.strip():
+                st.session_state[processing_key] = user_input.strip()
+                st.rerun()
 
 
 # ─── Sidebar ─────────────────────────────────────────────────────────────────
@@ -306,7 +326,7 @@ with st.sidebar:
     
     for page, label in zip(pages, page_labels):
         is_active = st.session_state.page == page
-        if st.button(label, use_container_width=True, type="primary" if is_active else "secondary"):
+        if st.button(label, use_container_width=True, type="primary" if is_active else "secondary", key=f"nav_{page}"):
             st.session_state.page = page
             st.rerun()
 
@@ -329,7 +349,7 @@ if st.session_state.page == "Generate":
     with col1:
         url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=...", label_visibility="collapsed")
     with col2:
-        start_btn = st.button("🚀 Начать магию", disabled=not url, use_container_width=True, type="primary")
+        start_btn = st.button("🚀 Начать магию", disabled=not url, use_container_width=True, type="primary", key="start_magic_btn")
 
     if start_btn:
         st.session_state.last_result = None
@@ -387,7 +407,7 @@ elif st.session_state.page == "Library":
 
     # ── Detail view (replaces the list entirely) ──
     if sel_id:
-        if st.button("← Назад к библиотеке", type="secondary"):
+        if st.button("← Назад к библиотеке", type="secondary", key=f"back_btn_{sel_id}"):
             st.session_state.selected_library_video = None
             st.rerun()
 
@@ -447,7 +467,7 @@ elif st.session_state.page == "Settings":
     st.header("Управление данными")
     st.write("Очистка кэша поможет освободить место в базе данных.")
 
-    if st.button("🧹 Удалить устаревшие видео (7+ дней)", type="primary"):
+    if st.button("🧹 Удалить устаревшие видео (7+ дней)", type="primary", key="delete_expired_btn"):
         with st.spinner("Удаление..."):
             try:
                 r = requests.delete(f"{API_URL}/videos/expired", timeout=10)
