@@ -205,58 +205,85 @@ def render_video_details(video_id, data, context="gen"):
             st.caption(f"Кэш: {'Использован' if data.get('cache_hit') else 'Создан заново'}")
 
     with t3:
-        st.subheader("🎙️ Аудио подкаст")
-        if check_audio_exists(video_id):
-            st.audio(f"{API_URL}/videos/{video_id}/audio")
-        else:
-            st.info("🎙️ Аудио ещё не сгенерировано.")
-            if st.button("Создать аудио", key=f"{context}_gen_audio_{video_id}"):
-                with st.spinner("Генерирую..."):
-                    try:
-                        r = requests.post(f"{API_URL}/videos/{video_id}/audio", timeout=300)
-                        if r.status_code == 200:
-                            st.success("✅ Аудио готово!")
-                            st.rerun()
-                        else:
-                            st.error(r.text)
-                    except Exception as e:
-                        st.error(f"Ошибка при генерации аудио: {e}")
+        @st.fragment
+        def audio_fragment():
+            st.subheader("🎙️ Аудио подкаст")
+            audio_status_key = f"{context}_audio_ready_{video_id}"
+            audio_generating_key = f"{context}_audio_gen_{video_id}"
+
+            # Cache audio existence in session state to avoid repeated network calls
+            if audio_status_key not in st.session_state:
+                st.session_state[audio_status_key] = check_audio_exists(video_id)
+
+            box = st.container(height=300, border=True)
+            with box:
+                if st.session_state[audio_status_key]:
+                    st.audio(f"{API_URL}/videos/{video_id}/audio")
+                    st.success("✅ Аудио готово к прослушиванию.")
+                elif st.session_state.get(audio_generating_key):
+                    # Generating — show ONLY spinner (no button)
+                    with st.spinner("🎙️ Генерирую аудио... Это может занять пару минут."):
+                        try:
+                            r = requests.post(f"{API_URL}/videos/{video_id}/audio", timeout=300)
+                            if r.status_code == 200:
+                                st.session_state[audio_status_key] = True
+                                st.session_state.pop(audio_generating_key, None)
+                                st.rerun()  # reruns only this fragment
+                            else:
+                                st.session_state.pop(audio_generating_key, None)
+                                st.error(r.text)
+                        except Exception as e:
+                            st.session_state.pop(audio_generating_key, None)
+                            st.error(f"Ошибка при генерации аудио: {e}")
+                else:
+                    # Idle — show ONLY button (no spinner)
+                    st.info("🎙️ Аудио ещё не сгенерировано.")
+                    if st.button("Создать аудио", key=f"{context}_gen_audio_{video_id}"):
+                        st.session_state[audio_generating_key] = True
+                        st.rerun()  # reruns only this fragment
+
+        audio_fragment()
 
     with t4:
-        st.subheader("🎯 Рекомендации по теме")
-        rec_cache_key = f"{context}_rec_{video_id}"
-        rec_loading_key = f"{context}_rec_loading_{video_id}"
+        @st.fragment
+        def recommendations_fragment():
+            st.subheader("🎯 Рекомендации по теме")
+            rec_cache_key = f"{context}_rec_{video_id}"
+            rec_loading_key = f"{context}_rec_loading_{video_id}"
 
-        if context == "gen" and data.get("recommendation"):
+            if context == "gen" and data.get("recommendation"):
+                if rec_cache_key not in st.session_state:
+                    st.session_state[rec_cache_key] = data["recommendation"]
+
             if rec_cache_key not in st.session_state:
-                st.session_state[rec_cache_key] = data["recommendation"]
-
-        if rec_cache_key not in st.session_state:
-            st.session_state[rec_cache_key] = None
-
-        # --- Handle pending recommendation load ---
-        if st.session_state.get(rec_loading_key):
-            st.session_state.pop(rec_loading_key)
-            with st.spinner("🔍 Ищем релевантные курсы и книги..."):
-                rec_result = get_recommendations(video_id)
-            if rec_result and (rec_result.get("courses") or rec_result.get("books")):
-                st.session_state[rec_cache_key] = rec_result
-            else:
                 st.session_state[rec_cache_key] = None
-                st.error("Не удалось получить рекомендации. Попробуйте позже.")
 
-        # --- Render ---
-        cached_rec = st.session_state[rec_cache_key]
+            cached_rec = st.session_state[rec_cache_key]
 
-        if cached_rec and (cached_rec.get("courses") or cached_rec.get("books")):
-            render_recommendations(cached_rec)
-        else:
-            if context == "gen" and not data.get("recommendation"):
-                st.info("Рекомендации ещё не сгенерированы для этого видео.")
+            box = st.container(height=400, border=True)
+            with box:
+                if cached_rec and (cached_rec.get("courses") or cached_rec.get("books")):
+                    render_recommendations(cached_rec)
+                elif st.session_state.get(rec_loading_key):
+                    # Loading — show ONLY spinner (no button)
+                    with st.spinner("🔍 Ищем релевантные курсы и книги..."):
+                        rec_result = get_recommendations(video_id)
+                    st.session_state.pop(rec_loading_key, None)
+                    if rec_result and (rec_result.get("courses") or rec_result.get("books")):
+                        st.session_state[rec_cache_key] = rec_result
+                        st.rerun()  # reruns only this fragment
+                    else:
+                        st.session_state[rec_cache_key] = None
+                        st.error("Не удалось получить рекомендации. Попробуйте позже.")
+                else:
+                    # Idle — show ONLY button (no spinner)
+                    if context == "gen" and not data.get("recommendation"):
+                        st.info("Рекомендации ещё не сгенерированы для этого видео.")
+                    if st.button("🔍 Загрузить рекомендации", key=f"btn_rec_{context}_{video_id}", use_container_width=True):
+                        st.session_state[rec_loading_key] = True
+                        st.rerun()  # reruns only this fragment
 
-            if st.button("🔍 Загрузить рекомендации", key=f"btn_rec_{context}_{video_id}", use_container_width=True):
-                st.session_state[rec_loading_key] = True
-                st.rerun()
+        recommendations_fragment()
 
     with t5:
         st.subheader("💬 Задать вопрос по видео")
