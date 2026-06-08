@@ -19,10 +19,7 @@ base_embeddings = HuggingFaceEmbeddings(
 
 
 def _safe_collection_name(video_id: str) -> str:
-    """Sanitise video_id into a valid ChromaDB collection name.
-
-    Rules: 3-512 chars from [a-zA-Z0-9._-], must start & end with [a-zA-Z0-9].
-    """
+    
     name = re.sub(r"[^a-zA-Z0-9._-]", "_", video_id)
     name = name.strip("._-") or "vid"
     if not name[0].isalnum():
