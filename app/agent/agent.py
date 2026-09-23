@@ -15,7 +15,7 @@ from db.cache import (
     get_cached_recommendation, save_recommendation_to_cache,
 )
 from agent.chat_agent.rag import index_video, ask
-from agent.agent_state import GraphState, extract_text, gemini, llama_70b, llm3, llm4,gpt_20b
+from agent.agent_state import GraphState, extract_text, gemini, gpt_120b, gpt_20b
 from langchain_tavily import TavilySearch
 
 init_db()
@@ -72,10 +72,11 @@ is_suitable = true ТОЛЬКО если это обучающий/образо�
     result = gpt_20b.invoke(prompt)
     raw = extract_text(result).strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     
+    fallback = {"category": "unknown", "is_suitable": True, "confidence": 0.6, "reason": "parse error"}
     try:
-        classification = json.loads(raw)
-    except:
-        classification = {"category": "unknown", "is_suitable": True, "confidence": 0.5, "reason": "parse error"}
+        classification = {**fallback, **json.loads(raw)}
+    except Exception:
+        classification = fallback
     
     print(f"📊 Категория: {classification['category']} | Подходит: {classification['is_suitable']} | Уверенность: {classification['confidence']}")
     
@@ -90,7 +91,7 @@ is_suitable = true ТОЛЬКО если это обучающий/образо�
 
 def route_classify(state: GraphState):
     if state.get("is_suitable") and state.get("classification_confidence", 1.0) >= 0.6:
-        return "cache_node"
+        return "start_pipeline"
     else:
         return "reject"
 
@@ -211,9 +212,14 @@ def keyword_node(state:GraphState):
     
 
 
-    result = llama_70b.invoke(prompt)
+    result = gpt_120b.invoke(prompt)
     raw = extract_text(result).strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    keywords = json.loads(raw)
+    try:
+        keywords = json.loads(raw)
+    except json.JSONDecodeError:
+        keywords = []
+    if not isinstance(keywords, list):
+        keywords = []
     print(f"✅ Ключевые слова: {keywords}")
     return {"keywords": keywords,
             "agent_execution_order" : ["keywords"]
@@ -265,8 +271,8 @@ def script_node(state: GraphState):
 - Английские технические термины, названия технологий, библиотек и аббревиатуры оставляй на английском (например: neural network → нейронная сеть, но PyTorch, API, LLM, transformer — без перевода)
 
 Пример формата:
-{host1}
-{host2}
+{host1}: текст реплики
+{host2}: текст реплики
 """
     
     if state.get("critic_feedback") and state.get("retry_count", 0) > 0:
@@ -310,14 +316,14 @@ def critic_node(state:GraphState):
     Отвечай строго на языке: {language} (для фидбека).
     """
 
-    result = llama_70b.invoke(prompt)
+    result = gpt_120b.invoke(prompt)
     raw = extract_text(result).strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
 
+    fallback = {"is_valid": True, "feedback": "JSON parse error, пропускаем."}
     try:
-        critic_result = json.loads(raw)
-    
-    except Exception as e:
-        critic_result = {"is_valid": True, "feedback": "JSON parse error, пропускаем."}
+        critic_result = {**fallback, **json.loads(raw)}
+    except Exception:
+        critic_result = fallback
     
     print(f"  📝 Вердикт критика: {critic_result['is_valid']} | Фидбек: {critic_result['feedback']}")
 
@@ -341,28 +347,21 @@ def route_critic(state: GraphState):
 
 def audio_node(state: GraphState):
     video_id = state["video_metadata"]["video_id"]
-    output_path = "podcast.mp3"
+    audio_url = f"/videos/{video_id}/audio"
 
-    cached_audio = get_cached_audio(video_id)
-    if cached_audio:
+    if get_cached_audio(video_id):
         print(f"💾 Аудио найдено в БД, пропускаю генерацию: {video_id}")
-        with open(output_path, "wb") as f:
-            f.write(cached_audio)
-        print(f"✅ Аудио восстановлено из БД: {output_path}")
-        return {"audio_path": output_path}
+        return {"audio_path": audio_url}
 
     print("🎙️ Агент 5: Генерирую аудио через ElevenLabs...")
     audio_tool = AudioGeneratorTool()
     try:
-        path = audio_tool.generate_podcast_audio(
+        audio_bytes = audio_tool.generate_podcast_audio(
             script=state["podcast_script"],
             language=state["video_metadata"]["language"],
-            output_path=output_path,
         )
-        with open(path, "rb") as f:
-            audio_bytes = f.read()
         save_audio_to_cache(video_id, audio_bytes)
-        return {"audio_path": path}
+        return {"audio_path": audio_url}
     except Exception as e:
         print(f"🚨 Ошибка в audio_node: {e}")
         return {"audio_path": "error"}
@@ -370,13 +369,20 @@ def audio_node(state: GraphState):
 def merge_node(state: GraphState):
     return {}
 
+# runs first: an already processed video (any link form) is served from the DB without YouTube or LLM calls
 def cache_node(state:GraphState):
-    video_id = state["video_metadata"]["video_id"]
+    video_id = YoutubeExtractTool().extract_video_id(state["video_url"])
     cached= get_cached_video(video_id)
 
     if cached:
         print(f"💾 Найдено в кэше: {video_id}")
         return {
+            "video_metadata": {
+                "video_id": video_id,
+                "title": cached["title"],
+                "language": cached["language"],
+                "video_url": state["video_url"],
+            },
             "summary" : cached["summary"],
             "keywords" : cached["keywords"],
             "podcast_script": cached["podcast_script"],
@@ -415,7 +421,7 @@ def route_cache(state: GraphState):
         if state.get("skip_audio"):
             return "end"
         return "audio"
-    return "start_pipeline"
+    return "extract_transcript"
 
 
 def route_post_save(state: GraphState):

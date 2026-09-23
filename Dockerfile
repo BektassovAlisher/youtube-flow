@@ -15,9 +15,9 @@ COPY . .
 
 ENV PYTHONPATH=/app/app
 
-EXPOSE 8000 8501
+EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn app.api.api:app --host 0.0.0.0 --port 8000 & streamlit run app/ui/ui.py --server.port 8501 --server.address 0.0.0.0"]
+CMD ["uvicorn", "app.api.api:app", "--host", "0.0.0.0", "--port", "8000"]
 
 
 

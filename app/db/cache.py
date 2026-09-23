@@ -1,11 +1,6 @@
-from datetime import datetime, timedelta
 from .database import SessionLocal, Video, Summary, Keyword, PodcastScript, PodcastAudio, Recommendation
 from agent.chat_agent.rag import delete_video_index
 
-
-
-def is_expired(created_at: datetime, days: int = 7) -> bool:
-    return datetime.utcnow() - created_at > timedelta(days=days)
 
 
 def _delete_children(session, video_id: str, delete_index: bool = True):
@@ -20,18 +15,11 @@ def _delete_children(session, video_id: str, delete_index: bool = True):
         delete_video_index(video_id)
 
 
-def get_cached_video(video_id: str, ttl_days: int = 7) -> dict | None:
+def get_cached_video(video_id: str) -> dict | None:
     session = SessionLocal()
     try:
         video = session.query(Video).filter(Video.video_id == video_id).first()
         if not video:
-            return None
-
-        if is_expired(video.created_at, days=ttl_days):
-            print(f"⏰ Кэш устарел: {video_id} — удаляем")
-            _delete_children(session, video_id)
-            session.delete(video)
-            session.commit()
             return None
 
         summary  = session.query(Summary).filter(Summary.video_id == video_id).first()
@@ -110,6 +98,7 @@ def save_to_cache(
     except Exception as e:
         session.rollback()
         print(f"🚨 Ошибка сохранения в БД: {e}")
+        raise
     finally:
         session.close()
 
@@ -160,6 +149,7 @@ def save_audio_to_cache(video_id: str, audio_data: bytes):
     except Exception as e:
         session.rollback()
         print(f"🚨 Ошибка сохранения аудио: {e}")
+        raise
     finally:
         session.close()
 
@@ -175,26 +165,5 @@ def delete_cache(video_id: str):
     except Exception as e:
         session.rollback()
         print(f"🚨 Ошибка удаления: {e}")
-    finally:
-        session.close()
-
-
-def delete_expired_cache(days: int = 7):
-    session = SessionLocal()
-    try:
-        cutoff = datetime.utcnow() - timedelta(days=days)
-        old_videos = session.query(Video).filter(Video.created_at < cutoff).all()
-
-        for video in old_videos:
-            _delete_children(session, video.video_id)
-            session.delete(video)
-            print(f"🗑️ Удалён: {video.video_id}")
-
-        session.commit()
-        print(f"✅ Очистка завершена — удалено {len(old_videos)} видео")
-
-    except Exception as e:
-        session.rollback()
-        print(f"🚨 Ошибка очистки: {e}")
     finally:
         session.close()

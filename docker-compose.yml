@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: lecture_agent
     ports:
-      - "5432:5432"
+      - "5435:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -29,18 +29,15 @@ services:
       - .:/app
       - vector_storage:/app/vector_storage
 
-  ui:
-    build: .
+  web:
+    build: ./web
     restart: always
     environment:
       - API_URL=http://api:8000
-    command: streamlit run app/ui/ui.py --server.port 8501 --server.address 0.0.0.0
     ports:
-      - "8501:8501"
+      - "3000:3000"
     depends_on:
       - api
-    volumes:
-      - .:/app
 
 volumes:
   postgres_data:

@@ -2,13 +2,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import List, Optional
+from datetime import datetime
 from agent.agent_node import app as agent_app
 from agent.agent import qa_agent, recommend_node
 from db.cache import (
-    get_cached_video, get_cached_audio, delete_cache, delete_expired_cache,
+    get_cached_video, get_cached_audio, delete_cache,
     save_audio_to_cache, get_cached_recommendation,
 )
 from db.database import SessionLocal, Video
+from tools.youtube_scraper import YoutubeExtractTool
 
 
 app = FastAPI(
@@ -54,6 +56,7 @@ class QAResponse(BaseModel):
 
 class VideoInfo(BaseModel):
     video_id: str
+    title: str | None = None
     summary: str
     keywords: List[str]
     podcast_script: str
@@ -63,10 +66,12 @@ class VideoInfo(BaseModel):
 
 class VideoListItem(BaseModel):
     video_id: str
+    title: str | None = None
     url: str
     language: str | None
     duration_sec: float | None
     category: str | None = None
+    created_at: datetime | None = None
 
 
 class AudioGenerateResponse(BaseModel):
@@ -84,6 +89,10 @@ class RecommendResponse(BaseModel):
 
 @app.post("/generate", response_model=GenerateResponse)
 def generate_podcast(req: GenerateRequest):
+    try:
+        YoutubeExtractTool().extract_video_id(req.video_url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     try:
         data = {
             "video_url": req.video_url,
@@ -193,12 +202,9 @@ def get_recommendations(video_id: str):
 @app.post("/videos/{video_id}/audio", response_model=AudioGenerateResponse)
 def generate_audio_for_video(video_id: str):
     """Генерирует аудио для уже обработанного видео (скрипт должен быть в кэше)."""
-    cached_audio = get_cached_audio(video_id)
-    if cached_audio:
-        output_path = f"{video_id}.mp3"
-        with open(output_path, "wb") as f:
-            f.write(cached_audio)
-        return AudioGenerateResponse(video_id=video_id, audio_path=output_path, from_cache=True)
+    audio_url = f"/videos/{video_id}/audio"
+    if get_cached_audio(video_id):
+        return AudioGenerateResponse(video_id=video_id, audio_path=audio_url, from_cache=True)
 
     cached = get_cached_video(video_id)
     if not cached:
@@ -212,16 +218,9 @@ def generate_audio_for_video(video_id: str):
     try:
         from tools.audio_generator import AudioGeneratorTool
         audio_tool = AudioGeneratorTool()
-        output_path = f"{video_id}.mp3"
-        path = audio_tool.generate_podcast_audio(
-            script=script,
-            language=language,
-            output_path=output_path,
-        )
-        with open(path, "rb") as f:
-            audio_bytes = f.read()
+        audio_bytes = audio_tool.generate_podcast_audio(script=script, language=language)
         save_audio_to_cache(video_id, audio_bytes)
-        return AudioGenerateResponse(video_id=video_id, audio_path=path, from_cache=False)
+        return AudioGenerateResponse(video_id=video_id, audio_path=audio_url, from_cache=False)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -234,10 +233,12 @@ def list_videos():
         return [
             VideoListItem(
                 video_id=v.video_id,
+                title=v.title,
                 url=v.url,
                 language=v.language,
                 duration_sec=v.duration_sec,
                 category=v.category,
+                created_at=v.created_at,
             )
             for v in videos
         ]
@@ -252,6 +253,7 @@ def get_video(video_id: str):
         raise HTTPException(status_code=404, detail="Видео не найдено в кэше")
     return VideoInfo(
         video_id=cached["video_id"],
+        title=cached["title"],
         summary=cached["summary"],
         keywords=cached["keywords"],
         podcast_script=cached["podcast_script"],
@@ -275,12 +277,6 @@ def get_audio(video_id: str):
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
-
-@app.delete("/videos/expired")
-def delete_expired():
-    delete_expired_cache(days=7)
-    return {"message": "Устаревшие видео удалены"}
 
 
 @app.delete("/videos/{video_id}")
