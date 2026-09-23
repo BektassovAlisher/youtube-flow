@@ -96,7 +96,7 @@ const d = (n: number) => ({ "--d": n }) as CSSProperties;
 
 // typewriter for the headline: uneven gaps between keystrokes (ms) read as a person typing;
 // fixed values so the server-rendered HTML and the client agree
-const WORD = "Конспект любой лекции с YouTube";
+const WORD = "Конспект любого урока с YouTube";
 const GAPS = Array.from(WORD, (_, i) => (i ? 40 + ((i * 29) % 50) : 0));
 const KEYSTROKES = GAPS.map((_, i) => 150 + GAPS.slice(0, i + 1).reduce((a, b) => a + b, 0));
 const DONE = KEYSTROKES[KEYSTROKES.length - 1] + 500;
