@@ -12,7 +12,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
   api:
-    build: .
+    build: ./backend
     restart: always
     environment:
       - DATABASE_URL=postgresql://postgres:${DB_PASSWORD}@db:5432/lecture_agent
@@ -26,11 +26,11 @@ services:
     depends_on:
       - db
     volumes:
-      - .:/app
+      - ./backend:/app
       - vector_storage:/app/vector_storage
 
   web:
-    build: ./web
+    build: ./frontend
     restart: always
     environment:
       - API_URL=http://api:8000
