@@ -32,11 +32,13 @@ export type Answer = { answer: string; sources: { timestamp: string; url: string
 // Browser talks to /api/*, which app/api/[...path]/route.ts forwards to FastAPI.
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api/${path}`, { ...init, headers: { "content-type": "application/json" } });
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new Error(typeof body?.detail === "string" ? body.detail : `Ошибка ${res.status}`);
-  }
+  if (!res.ok) await fail(res);
   return res.json();
+}
+
+export async function fail(res: Response): Promise<never> {
+  const body = await res.json().catch(() => null);
+  throw new Error(typeof body?.detail === "string" ? body.detail : `Ошибка ${res.status}`);
 }
 
 export const CATEGORY: Record<string, string> = {

@@ -1,24 +1,17 @@
-"use client";
-
 import Link from "next/link";
-import { useEffect, useState, type CSSProperties } from "react";
-import { addedOn, api, CATEGORY, minutes, thumb, type VideoListItem } from "@/lib/api";
+import type { CSSProperties } from "react";
+import { addedOn, CATEGORY, minutes, thumb, type VideoListItem } from "@/lib/api";
+import { serverApi } from "@/lib/server-api";
 
-export default function LibraryPage() {
-  const [videos, setVideos] = useState<VideoListItem[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api<VideoListItem[]>("videos")
-      .then(setVideos)
-      .catch((e) => setError(e.message));
-  }, []);
+export default async function LibraryPage() {
+  const videos = await serverApi<VideoListItem[]>("videos");
+  const error = videos ? null : "API недоступен";
 
   return (
     <>
       <div className="bar rise">
         <div>
-          <p className="eyebrow">{videos ? `${videos.length} видео` : "Загрузка"}</p>
+          {videos && <p className="eyebrow">{videos.length} видео</p>}
           <h1 className="section-title">Библиотека</h1>
         </div>
       </div>
@@ -32,7 +25,6 @@ export default function LibraryPage() {
       )}
 
       <ul className="grid">
-        {!videos && !error && [0, 1, 2].map((i) => <li key={i} className="skeleton" />)}
         {videos?.map((v, i) => {
           const tags = [v.language?.toUpperCase(), minutes(v.duration_sec), CATEGORY[v.category ?? ""]].filter(Boolean);
           return (

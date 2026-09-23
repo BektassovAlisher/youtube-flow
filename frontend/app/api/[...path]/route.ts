@@ -1,5 +1,6 @@
-// Runtime proxy to FastAPI: keeps one origin (no CORS) and reads API_URL at runtime, so Docker can point it at http://api:8000.
-const API_URL = process.env.API_URL ?? "http://127.0.0.1:8000";
+import { API_URL } from "@/lib/server-api";
+
+// Runtime proxy to FastAPI: keeps one origin (no CORS).
 
 async function proxy(req: Request, ctx: RouteContext<"/api/[...path]">) {
   const { path } = await ctx.params;
