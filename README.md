@@ -139,40 +139,37 @@ start_pipeline ──┬──▶ summarize ──┐
 
 ```
 youtube-flow/
-├── app/
-│   ├── agent/
-│   │   ├── agent.py              # Ноды агентов (cache, extract, classify, summarize, script, critic, audio, recommend…)
-│   │   ├── agent_node.py         # Граф LangGraph — связи между нодами
-│   │   ├── agent_state.py        # GraphState (TypedDict) + инициализация LLM
-│   │   └── chat_agent/
-│   │       └── rag.py            # RAG: индексация, гибридный поиск, QA-цепочка
-│   ├── api/
-│   │   └── api.py                # FastAPI — REST endpoints
-│   ├── db/
-│   │   ├── database.py           # SQLAlchemy модели (Video, Summary, Keyword, PodcastScript, PodcastAudio, Recommendation)
-│   │   └── cache.py              # Чтение/запись/удаление кэша
-│   └── tools/
-│       ├── youtube_scraper.py    # Извлечение транскрипта с YouTube
-│       ├── chunking_transcript.py # Разбивка транскрипта на чанки с таймкодами
-│       └── audio_generator.py    # Двухголосое аудио через ElevenLabs
-├── web/                          # Next.js интерфейс
+├── backend/                          # Python: FastAPI + LangGraph
 │   ├── app/
-│   │   ├── page.tsx              # Главная: ввод ссылки, «Как это работает»
-│   │   ├── library/page.tsx      # Библиотека
-│   │   ├── videos/[id]/page.tsx  # Страница видео: конспект, сценарий, аудио, рекомендации, вопросы
-│   │   ├── api/[...path]/route.ts # Прокси /api/* → FastAPI
-│   │   ├── header.tsx            # Навигация и переключатель темы
-│   │   └── globals.css           # Темы, типографика, анимации
-│   ├── lib/api.ts                # Типы и клиент API
+│   │   ├── agent/
+│   │   │   ├── agent.py              # Ноды агентов (cache, extract, classify, summarize, script, critic, audio, recommend…)
+│   │   │   ├── agent_node.py         # Граф LangGraph — связи между нодами
+│   │   │   ├── agent_state.py        # GraphState (TypedDict) + инициализация LLM
+│   │   │   └── chat_agent/rag.py     # RAG: индексация, гибридный поиск, QA-цепочка
+│   │   ├── api/api.py                # FastAPI — REST endpoints
+│   │   ├── db/
+│   │   │   ├── database.py           # SQLAlchemy модели
+│   │   │   └── cache.py              # Чтение/запись/удаление кэша
+│   │   └── tools/
+│   │       ├── youtube_scraper.py    # Извлечение транскрипта с YouTube
+│   │       ├── chunking_transcript.py # Разбивка транскрипта на чанки с таймкодами
+│   │       └── audio_generator.py    # Двухголосое аудио через ElevenLabs
+│   ├── tests/test_cache_first.py     # Проверка: обработанное видео отдаётся из кэша
+│   ├── Dockerfile                    # Образ API
+│   └── requirements.txt
+├── frontend/                         # Next.js интерфейс
+│   ├── app/
+│   │   ├── page.tsx                  # Главная: ввод ссылки, «Как это работает»
+│   │   ├── library/page.tsx          # Библиотека
+│   │   ├── videos/[id]/page.tsx      # Страница видео
+│   │   ├── api/[...path]/route.ts    # Прокси /api/* → FastAPI
+│   │   ├── header.tsx                # Навигация и переключатель темы
+│   │   └── globals.css               # Темы, типографика, анимации
+│   ├── lib/api.ts                    # Типы и клиент API
 │   └── Dockerfile
-├── tests/
-│   └── test_cache_first.py       # Проверка: обработанное видео отдаётся из кэша
-├── docs/screenshots/             # Скриншоты для README
-├── vector_storage/               # Хранилище ChromaDB (персистентное)
-├── Dockerfile                    # Образ API
-├── docker-compose.yml            # db + api + web
-├── requirements.txt
-├── .env.example                  # Шаблон переменных окружения
+├── docs/screenshots/                 # Скриншоты для README
+├── docker-compose.yml                # db + api + web
+├── .env.example                      # Шаблон переменных окружения
 └── README.md
 ```
 
@@ -205,7 +202,7 @@ docker compose up -d --build
 ```bash
 python -m venv venv
 source venv/bin/activate  # macOS/Linux
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 ```
 
 2. **Переменные окружения:**
@@ -217,13 +214,13 @@ cp .env.example .env
 
 4. **API:**
 ```bash
-cd app
+cd backend/app
 uvicorn api.api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 5. **Интерфейс** (в отдельном терминале):
 ```bash
-cd web
+cd frontend
 npm install
 npm run dev
 ```
@@ -233,7 +230,7 @@ npm run dev
 
 **Проверка кэша** (без внешних API, на временной SQLite):
 ```bash
-venv/bin/python tests/test_cache_first.py
+venv/bin/python backend/tests/test_cache_first.py
 ```
 
 ---
@@ -341,7 +338,7 @@ curl -X POST http://localhost:8000/videos/VIDEO_ID/recommend
 
 ## 🖥️ Интерфейс
 
-Интерфейс написан на **Next.js** (`web/`): Bricolage Grotesque и Inter Tight в заголовках, Inter в тексте, JetBrains Mono в подписях.
+Интерфейс написан на **Next.js** (`frontend/`): Bricolage Grotesque и Inter Tight в заголовках, Inter в тексте, JetBrains Mono в подписях.
 
 ### Создать
 - Словесный знак с эффектом печати, ввод ссылки и таймер обработки
