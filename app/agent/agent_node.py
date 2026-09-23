@@ -43,35 +43,35 @@ agent.add_node("save_to_db", save_to_db_node)
 agent.add_node("audio", audio_node)
 agent.add_node("recommend", recommend_node)
 
-agent.add_edge(START, "extract_transcript")
+agent.add_edge(START, "cache_node")
+
+agent.add_conditional_edges(
+    "cache_node",
+    route_cache,
+    {
+        "extract_transcript": "extract_transcript",
+        "audio": "audio",
+        "end": END,
+    }
+)
 
 agent.add_edge("extract_transcript", "classify")
-agent.add_edge("extract_transcript", "rag_index")
 agent.add_edge("rag_index", END)
 
 agent.add_conditional_edges(
     "classify",
     route_classify,
     {
-        "cache_node": "cache_node",
+        "start_pipeline": "start_pipeline",
         "reject": "reject",
     }
 )
 
 agent.add_edge("reject", END)
 
-agent.add_conditional_edges(
-    "cache_node",
-    route_cache,
-    {
-        "start_pipeline": "start_pipeline",
-        "audio": "audio",
-        "end": END,
-    }
-)
-
 agent.add_edge("start_pipeline", "summarize")
 agent.add_edge("start_pipeline", "keywords")
+agent.add_edge("start_pipeline", "rag_index")
 agent.add_edge("summarize", "merge")
 agent.add_edge("keywords", "merge")
 agent.add_edge("merge", "script")

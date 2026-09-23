@@ -8,15 +8,7 @@ import os
 load_dotenv()
 gemini = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", api_key=os.getenv("GOOGLE_API_KEY"))
 
-
-llm1 = ChatGroq(model="openai/gpt-oss-120b", api_key=os.getenv("GROQ_API_KEY"))
-
-llama_70b = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, api_key=os.getenv("GROQ_API_KEY"))
-
-
-llm3 = ChatGroq(model="qwen/qwen3:32b", api_key=os.getenv("GROQ_API_KEY"))
-
-llm4 = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct", api_key=os.getenv("GROQ_API_KEY"))
+gpt_120b = ChatGroq(model="openai/gpt-oss-120b", temperature=0, api_key=os.getenv("GROQ_API_KEY"))
 
 gpt_20b = ChatGroq(model="openai/gpt-oss-20b", api_key=os.getenv("GROQ_API_KEY"))
 
@@ -47,6 +39,4 @@ class GraphState(TypedDict):
 
 
 def extract_text(result) -> str:
-    if isinstance(result.content, list):
-        return result.content[0]["text"]
-    return result.content
+    return result.text

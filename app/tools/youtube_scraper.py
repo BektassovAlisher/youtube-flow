@@ -44,12 +44,12 @@ class YoutubeExtractTool:
         title = f"Video {video_id}"
         try:
             import requests
-            r = requests.get(video_url, timeout=5)
+            r = requests.get(f"https://www.youtube.com/watch?v={video_id}", timeout=5)
             if r.status_code == 200:
                 match = re.search(r"<title>(.*?)</title>", r.text)
                 if match:
                     title = match.group(1).replace(" - YouTube", "").strip()
-        except:
+        except Exception:
             pass
 
         ytt_api = YouTubeTranscriptApi()

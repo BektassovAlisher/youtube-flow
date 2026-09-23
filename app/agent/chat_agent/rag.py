@@ -6,12 +6,14 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 import os
+from pathlib import Path
 from langchain_ollama import ChatOllama
-from agent.agent_state import llama_70b, gemini
+from agent.agent_state import gemini
 
 import re
 
-CHROMA = "vector_storage/chroma_db"
+# anchored to the project root so the index is the same whatever the cwd (Docker: /app/vector_storage volume)
+CHROMA = str(Path(__file__).resolve().parents[3] / "vector_storage" / "chroma_db")
 
 base_embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
