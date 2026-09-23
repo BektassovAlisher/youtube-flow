@@ -187,7 +187,7 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
             className="field"
             type="url"
             required
-            placeholder="Ссылка на лекцию с YouTube"
+            placeholder="Ссылка на видео с YouTube"
             aria-label="Ссылка на YouTube"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
