@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
+import json
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
@@ -87,61 +88,83 @@ class RecommendResponse(BaseModel):
     from_cache: bool
 
 
-@app.post("/generate", response_model=GenerateResponse)
-def generate_podcast(req: GenerateRequest):
+def _start(req: GenerateRequest) -> dict:
     try:
         YoutubeExtractTool().extract_video_id(req.video_url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    try:
-        data = {
-            "video_url": req.video_url,
-            "retry_count": 0,
-            "max_retries": 2,
-            "critic_feedback": "",
-            "is_valid": False,
-            "is_suitable": False,
-            "cache_hit": False,
-            "agent_execution_order": [],
-            "skip_audio": req.skip_audio,
-        }
+    return {
+        "video_url": req.video_url,
+        "retry_count": 0,
+        "max_retries": 2,
+        "critic_feedback": "",
+        "is_valid": False,
+        "is_suitable": False,
+        "cache_hit": False,
+        "agent_execution_order": [],
+        "skip_audio": req.skip_audio,
+    }
 
-        result = agent_app.invoke(data)
 
-        video_id = result["video_metadata"]["video_id"]
-        rejected = result.get("audio_path") == "rejected"
-
-        if rejected:
-            return GenerateResponse(
-                video_id=video_id,
-                summary=result.get("summary", ""),
-                keywords=[],
-                podcast_script="",
-                audio_cached=False,
-                cache_hit=False,
-                rejected=True,
-                skip_audio=req.skip_audio,
-                video_category=result.get("video_category"),
-                classification_reason=result.get("classification_reason"),
-            )
-
-        cached_audio = get_cached_audio(video_id)
-
+def _response(result: dict, req: GenerateRequest) -> GenerateResponse:
+    video_id = result["video_metadata"]["video_id"]
+    if result.get("audio_path") == "rejected":
         return GenerateResponse(
             video_id=video_id,
             summary=result.get("summary", ""),
-            keywords=result.get("keywords", []),
-            podcast_script=result.get("podcast_script", ""),
-            audio_cached=cached_audio is not None,
-            cache_hit=result.get("cache_hit", False),
-            rejected=False,
+            keywords=[],
+            podcast_script="",
+            audio_cached=False,
+            cache_hit=False,
+            rejected=True,
             skip_audio=req.skip_audio,
             video_category=result.get("video_category"),
             classification_reason=result.get("classification_reason"),
-            recommendation=result.get("recommendation"),
         )
+    return GenerateResponse(
+        video_id=video_id,
+        summary=result.get("summary", ""),
+        keywords=result.get("keywords", []),
+        podcast_script=result.get("podcast_script", ""),
+        audio_cached=get_cached_audio(video_id) is not None,
+        cache_hit=result.get("cache_hit", False),
+        rejected=False,
+        skip_audio=req.skip_audio,
+        video_category=result.get("video_category"),
+        classification_reason=result.get("classification_reason"),
+        recommendation=result.get("recommendation"),
+    )
+
+
+@app.post("/generate", response_model=GenerateResponse)
+def generate_podcast(req: GenerateRequest):
+    data = _start(req)
+    try:
+        return _response(agent_app.invoke(data), req)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Same as /generate, but reports progress: one NDJSON line per finished graph node ({"step": name}),
+# then {"result": ...} or {"error": ...}. The UI uses it to show which stage is running.
+@app.post("/generate/stream")
+def generate_stream(req: GenerateRequest):
+    data = _start(req)
+
+    def events():
+        state = None
+        try:
+            for mode, chunk in agent_app.stream(data, stream_mode=["updates", "values"]):
+                if mode == "values":
+                    state = chunk
+                else:
+                    for node in chunk:
+                        yield json.dumps({"step": node}) + "\n"
+            yield json.dumps({"result": _response(state, req).model_dump(mode="json")}) + "\n"
+        except Exception as e:
+            yield json.dumps({"error": str(e)}, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
 @app.post("/videos/{video_id}/qa", response_model=QAResponse)
