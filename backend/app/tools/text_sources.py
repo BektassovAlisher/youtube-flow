@@ -5,8 +5,10 @@ the summary and the answers point at «¶N», which links to that paragraph."""
 import hashlib
 import ipaddress
 import logging
+import os
 import re
 import socket
+from io import BytesIO
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlparse, urlunparse
 
 import requests
@@ -27,7 +29,7 @@ PARAGRAPH_CHARS = 1500  # longer blocks are split at sentence ends
 NO_TEXT = ("Не удалось найти на странице текст статьи — возможно, сайт показывает его только через JavaScript "
            "или за подпиской. Скопируйте текст и вставьте его вручную.")
 PAYWALL = "Сайт не пускает к статье (нужен вход или подписка). Скопируйте текст и вставьте его вручную."
-TRACKING = re.compile(r"^(utm_.*|fbclid|gclid|yclid|mc_cid|mc_eid|_hsenc|_hsmi|ref_src|spm)$")
+TRACKING = re.compile(r"^(utm_.*|fbclid|gclid|yclid|mc_cid|mc_eid|_hsenc|_hsmi|ref_src|spm|si|share)$")
 
 
 # ---- shared helpers ---------------------------------------------------------------------------
@@ -130,6 +132,89 @@ def title_from_text(raw: str) -> str:
             words = line.split()[:9]
             return " ".join(words).rstrip(",.:;") + "…"
     return "Текст"
+
+
+# ---- uploaded documents -----------------------------------------------------------------------
+
+MAX_FILE_BYTES = 20 * 1024 * 1024
+MAX_PDF_PAGES = 600
+DOCUMENT_TYPES = {".pdf": "pdf", ".txt": "txt", ".md": "md", ".markdown": "md"}
+_JUNK_TITLE = re.compile(r"^(untitled|без названия|microsoft (word|powerpoint)|document\d*|презентация|presentation)\b|"
+                         r"\.(docx?|pptx?|pdf|odt)$", re.I)
+
+
+def _decode(data: bytes) -> str:
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        from charset_normalizer import from_bytes  # old Russian files are often cp1251
+
+        best = from_bytes(data).best()
+        return str(best) if best else data.decode("utf-8", errors="replace")
+
+
+def _pdf(data: bytes) -> tuple[list[dict], str | None]:
+    """Page by page; a page becomes paragraphs at blank lines, long ones are cut at sentence ends."""
+    from pypdf import PdfReader
+
+    protected = "PDF защищён паролем — снимите защиту и загрузите файл ещё раз."
+    try:
+        reader = PdfReader(BytesIO(data))
+        if reader.is_encrypted:
+            try:
+                if not reader.decrypt(""):
+                    raise UserError(protected)
+            except UserError:
+                raise
+            except Exception:
+                raise UserError(protected)
+        if len(reader.pages) > MAX_PDF_PAGES:
+            raise UserError(f"В документе больше {MAX_PDF_PAGES} страниц — загрузите его частями.")
+        blocks = []
+        for number, page in enumerate(reader.pages, 1):
+            text = re.sub(r"(\w)-\n(\w)", r"\1\2", page.extract_text() or "")  # words hyphenated at line ends
+            for part in re.split(r"\n\s*\n", text):
+                if _clean(part):
+                    blocks.append((f"Страница {number}", _clean(part)))
+        title = reader.metadata.title if reader.metadata else None
+    except UserError:
+        raise
+    except Exception as e:  # pypdf.errors.PdfReadError and friends
+        log.info("PDF не читается: %s", e)
+        raise UserError("Не удалось прочитать PDF — файл повреждён или это не PDF.")
+    segments = _numbered(blocks)
+    chars = sum(len(seg["text"]) for seg in segments)
+    if chars < MIN_TEXT_CHARS:
+        raise UserError("В PDF почти нет текста — похоже, это скан. Распознавание сканов пока не поддерживается: "
+                        "скопируйте текст и вставьте его вручную.")
+    _check_length(chars, "Текст документа")
+    title = (title or "").strip()
+    return segments, title if len(title) >= 3 and not _JUNK_TITLE.search(title) else None
+
+
+def parse_document(filename: str, data: bytes) -> dict:
+    """An uploaded PDF, TXT or Markdown file as numbered paragraphs with a title."""
+    ext = os.path.splitext(filename or "")[1].lower()
+    kind = DOCUMENT_TYPES.get(ext)
+    if kind is None:
+        raise UserError("Поддерживаются файлы PDF, TXT и Markdown (.md).")
+    if not data:
+        raise UserError("Файл пустой.")
+    if len(data) > MAX_FILE_BYTES:
+        raise UserError(f"Файл слишком большой: до {MAX_FILE_BYTES // 1024 // 1024} МБ.")
+    name = os.path.splitext(os.path.basename(filename))[0].replace("_", " ").strip() or "Документ"
+    if kind == "pdf":
+        segments, title = _pdf(data)
+        source = "pdf"
+    else:
+        text = _decode(data)
+        segments = parse_pasted(text)
+        heading = re.search(r"^\s*#\s+(.+)$", text, re.M) if kind == "md" else None
+        title = _clean(heading.group(1)) if heading else None
+        source = "file"
+    full = "\n\n".join(seg["text"] for seg in segments)
+    return {"segments": segments, "title": (title or name)[:300], "source": source, "language": guess_language(full),
+            "text": full}
 
 
 # ---- articles ---------------------------------------------------------------------------------

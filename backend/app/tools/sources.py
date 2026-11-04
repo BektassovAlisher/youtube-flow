@@ -1,23 +1,19 @@
 """Kinds of material and how to point at a place inside each of them.
 
 youtube — timed subtitles, places are [MM:SS] and link to youtu.be/<id>?t=<sec>
+media   — video/audio from other sites or a media file: [MM:SS], linking to the original at that second
 article — paragraphs of a web page, places are [¶N] and link to the original page via #:~:text=
 text    — pasted paragraphs, places are [¶N] and link to the paragraph on the material page (#pN)"""
 from typing import Callable
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse  # noqa: F401  (urlparse: used by detect_url)
 
 from errors import UserError
-from tools import text_sources
+from tools import media, text_sources
+from tools.chunking_transcript import seconds_to_youtube_url
 from tools.youtube_scraper import HOSTS as YOUTUBE_HOSTS
 from tools.youtube_scraper import VIDEO_ID, parse_video_id, watch_url
 
-KINDS = ("youtube", "article", "text")
-
-# pages of these sites are videos, not articles: their text would make a meaningless summary
-VIDEO_SITES = {
-    "vimeo.com": None, "rutube.ru": None, "vkvideo.ru": None, "twitch.tv": None, "dailymotion.com": None,
-    "vk.com": "/video", "ok.ru": "/video", "dzen.ru": "/video", "ted.com": "/talks", "bilibili.com": "/video",
-}
+KINDS = ("youtube", "media", "article", "text")
 
 
 def detect_url(raw: str) -> tuple[str, str, str]:
@@ -27,7 +23,7 @@ def detect_url(raw: str) -> tuple[str, str, str]:
         return "youtube", s, watch_url(s)
     first = s.split("/")[0]
     if not s or ("://" not in s and "." not in first and ":" not in first):
-        raise UserError("Вставьте ссылку на видео YouTube или на статью.")
+        raise UserError("Вставьте ссылку на видео, подкаст или статью.")
     try:
         host = (urlparse(s if "://" in s else "https://" + s).hostname or "").lower().removeprefix("www.")
     except ValueError:
@@ -36,12 +32,8 @@ def detect_url(raw: str) -> tuple[str, str, str]:
         video_id = parse_video_id(s)
         return "youtube", video_id, watch_url(video_id)
     url = text_sources.canonical_url(s)
-    parsed = urlparse(url)
-    site = (parsed.hostname or "").removeprefix("www.").removeprefix("m.")
-    for name, prefix in VIDEO_SITES.items():
-        if (site == name or site.endswith("." + name)) and (prefix is None or parsed.path.startswith(prefix)):
-            raise UserError(f"Видео с {name} пока не поддерживаются — только YouTube. "
-                            "Если у видео есть расшифровка, её можно вставить текстом.")
+    if media.is_media_url(url):
+        return "media", media.media_id(url), url
     return "article", text_sources.article_id(url), url
 
 
@@ -59,6 +51,13 @@ def link_builder(kind: str, url: str | None, anchors: dict | None) -> Callable[[
     if kind == "text":
         return lambda n: f"#p{n}"
     return None
+
+
+def time_builder(kind: str, url: str | None, video_id: str) -> Callable[[float], str]:
+    """Second → link, for timed materials."""
+    if kind == "media":
+        return lambda sec: media.time_link(url or "", sec)
+    return lambda sec: seconds_to_youtube_url(video_id, sec)
 
 
 def prompt_text(segments: list[dict]) -> str:

@@ -1,5 +1,5 @@
-"""Fallback for videos without subtitles: yt-dlp downloads the audio track, ffmpeg cuts it into
-10-minute mono 16 kHz pieces and Groq Whisper transcribes them in parallel."""
+"""Speech recognition for recordings without subtitles: yt-dlp downloads the audio track (or a media file is
+given), ffmpeg cuts it into 10-minute mono 16 kHz pieces and Groq Whisper transcribes them in parallel."""
 import glob
 import logging
 import math
@@ -20,7 +20,7 @@ LANGUAGE_CODES = {"russian": "ru", "english": "en", "kazakh": "kk", "ukrainian":
                   "french": "fr", "spanish": "es", "turkish": "tr", "uzbek": "uz", "chinese": "zh"}
 
 
-def _download(video_id: str, folder: str) -> tuple[str, dict]:
+def _download(url: str, folder: str) -> tuple[str, dict]:
     import yt_dlp
 
     opts = {
@@ -35,25 +35,25 @@ def _download(video_id: str, folder: str) -> tuple[str, dict]:
         opts["proxy"] = config.YOUTUBE_PROXY_URL
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(watch_url(video_id), download=False)
+            info = ydl.extract_info(url, download=False)
             duration = info.get("duration") or 0
             if duration > config.WHISPER_MAX_MINUTES * 60:
-                raise UserError(f"У видео нет субтитров, а распознавать речь в роликах длиннее "
+                raise UserError(f"Субтитров нет, а распознавать речь в записях длиннее "
                                 f"{config.WHISPER_MAX_MINUTES} минут слишком долго.")
             ydl.process_ie_result(info, download=True)
     except UserError:
         raise
     except Exception as e:  # yt_dlp.utils.DownloadError and friends
         text = str(e).lower()
-        log.warning("yt-dlp %s: %s", video_id, e)
+        log.warning("yt-dlp %s: %s", url, e)
         if "not a bot" in text or "sign in" in text or "429" in text:
             raise UserError(BLOCKED, status=503)
         if "private" in text or "unavailable" in text:
-            raise UserError("Видео недоступно: оно удалено, скрыто или в ссылке ошибка.")
-        raise UserError("У видео нет субтитров, а скачать его звук для распознавания речи не получилось.", 503)
+            raise UserError("Запись недоступна: она удалена, скрыта или в ссылке ошибка.")
+        raise UserError("Субтитров нет, а скачать звук для распознавания речи не получилось.", 503)
     files = glob.glob(os.path.join(folder, "source.*"))
     if not files:
-        raise UserError("У видео нет субтитров, а скачать его звук для распознавания речи не получилось.", 503)
+        raise UserError("Субтитров нет, а скачать звук для распознавания речи не получилось.", 503)
     return files[0], info
 
 
@@ -76,7 +76,7 @@ def _cut(source: str, folder: str, index: int) -> str:
     return out
 
 
-def _transcribe(client, path: str, offset: float) -> tuple[list[dict], str | None]:
+def _transcribe_piece(client, path: str, offset: float) -> tuple[list[dict], str | None]:
     with open(path, "rb") as f:
         resp = client.audio.transcriptions.create(
             file=(os.path.basename(path), f.read()),
@@ -105,33 +105,49 @@ def _language_code(name: str | None) -> str:
     return name if len(name) == 2 else LANGUAGE_CODES.get(name, name[:2])
 
 
-def transcribe_youtube(video_id: str, client=None) -> dict:
-    from groq import Groq
+def _transcribe(source: str, duration: float, folder: str, client) -> dict:
+    pieces = max(1, math.ceil(duration / CHUNK_SECONDS))
 
-    client = client or Groq(api_key=require_env("GROQ_API_KEY"), max_retries=3, timeout=300)
-    with tempfile.TemporaryDirectory(prefix="videoflow-") as folder:
-        source, info = _download(video_id, folder)
-        duration = info.get("duration") or _probe_duration(source)
-        pieces = max(1, math.ceil(duration / CHUNK_SECONDS))
+    def work(i: int):
+        return _transcribe_piece(client, _cut(source, folder, i), i * CHUNK_SECONDS)
 
-        def work(i: int):
-            return _transcribe(client, _cut(source, folder, i), i * CHUNK_SECONDS)
-
-        try:
-            with ThreadPoolExecutor(PARALLEL) as pool:
-                results = list(pool.map(work, range(pieces)))
-        except subprocess.CalledProcessError as e:
-            log.error("ffmpeg: %s", e.stderr)
-            raise UserError("Не удалось подготовить звук видео к распознаванию (ffmpeg).", status=500)
-
+    try:
+        with ThreadPoolExecutor(PARALLEL) as pool:
+            results = list(pool.map(work, range(pieces)))
+    except subprocess.CalledProcessError as e:
+        log.error("ffmpeg: %s", e.stderr)
+        raise UserError("Не удалось подготовить звук к распознаванию (ffmpeg).", status=500)
     segments = [s for part, _ in results for s in part]
     if not segments:
-        raise UserError("В видео не удалось распознать речь.")
+        raise UserError("В записи не удалось распознать речь.")
     language = next((lang for _, lang in results if lang), None)
-    return {
-        "segments": segments,
-        "language": _language_code(language),
-        "source": "whisper",
-        "title": info.get("title"),
-        "channel": info.get("uploader") or info.get("channel"),
-    }
+    return {"segments": segments, "language": _language_code(language), "source": "whisper"}
+
+
+def _client(client):
+    from groq import Groq
+
+    return client or Groq(api_key=require_env("GROQ_API_KEY"), max_retries=3, timeout=300)
+
+
+def transcribe_url(url: str, client=None) -> dict:
+    """A page yt-dlp can download (a YouTube video, a Vimeo video, a podcast episode…)."""
+    client = _client(client)
+    with tempfile.TemporaryDirectory(prefix="videoflow-") as folder:
+        source, info = _download(url, folder)
+        data = _transcribe(source, info.get("duration") or _probe_duration(source), folder, client)
+    return {**data, "title": info.get("title"), "channel": info.get("uploader") or info.get("channel")}
+
+
+def transcribe_file(path: str, client=None) -> dict:
+    """A media file already on disk."""
+    client = _client(client)
+    duration = _probe_duration(path)
+    if duration > config.WHISPER_MAX_MINUTES * 60:
+        raise UserError(f"Распознавать речь в записях длиннее {config.WHISPER_MAX_MINUTES} минут слишком долго.")
+    with tempfile.TemporaryDirectory(prefix="videoflow-") as folder:
+        return {**_transcribe(path, duration, folder, client), "duration_sec": round(duration, 2)}
+
+
+def transcribe_youtube(video_id: str, client=None) -> dict:
+    return transcribe_url(watch_url(video_id), client)

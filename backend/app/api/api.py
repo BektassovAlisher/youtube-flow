@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -108,22 +108,26 @@ def _start(link: str, force: bool, request: Request) -> str:
     return video_id
 
 
-def _start_text(text: str, title: str | None, request: Request) -> str:
-    """Pasted text is parsed and saved right away; the run then starts from the classifier step."""
-    segments = text_sources.parse_pasted(text)
+def _start_segments(text: str, segments: list[dict], title: str, source: str, request: Request) -> str:
+    """Pasted or uploaded text is saved right away; the run then starts from the summary."""
     video_id = text_sources.text_id(text)
     video = repo.get_video(video_id)
     if video and _complete(video):
         return video_id
     if jobs.hub.get(video_id, "process") is None:
         limiter.hit("videos", client_id(request), config.LIMIT_VIDEOS_PER_HOUR)
-        name = (title or "").strip() or text_sources.title_from_text(text)
-        repo.begin_processing(video_id, "", kind="text", title=name)
-        repo.save_transcript(video_id, segments, language=text_sources.guess_language(text), source="pasted",
-                             duration_sec=None, title=name, channel=None,
+        repo.begin_processing(video_id, "", kind="text", title=title)
+        repo.save_transcript(video_id, segments, language=text_sources.guess_language(text), source=source,
+                             duration_sec=None, title=title, channel=None,
                              word_count=text_sources.word_count(segments))
     jobs.start_processing(video_id, "", kind="text")
     return video_id
+
+
+def _start_text(text: str, title: str | None, request: Request) -> str:
+    segments = text_sources.parse_pasted(text)
+    name = (title or "").strip() or text_sources.title_from_text(text)
+    return _start_segments(text, segments, name, "pasted", request)
 
 
 # ---- videos -----------------------------------------------------------------------------------
@@ -147,6 +151,16 @@ def create_video(req: CreateVideo, request: Request):
     if req.text is not None:
         return _payload(_start_text(req.text, req.title, request))
     return _payload(_start(req.url or req.video_url or "", req.force, request))
+
+
+@app.post("/videos/upload", dependencies=protected)
+async def upload(request: Request, file: UploadFile = File(...), title: str | None = Form(None, max_length=300)):
+    """A PDF, TXT or Markdown file becomes a text material, like pasted text."""
+    data = await file.read(text_sources.MAX_FILE_BYTES + 1)
+    doc = await asyncio.to_thread(text_sources.parse_document, file.filename or "", data)
+    name = (title or "").strip() or doc["title"]
+    video_id = await asyncio.to_thread(_start_segments, doc["text"], doc["segments"], name, doc["source"], request)
+    return await asyncio.to_thread(_payload, video_id)
 
 
 @app.get("/videos/{video_id}")
