@@ -139,7 +139,7 @@ def _info(url: str) -> dict:
             if info.get("_type") == "playlist" or info.get("entries"):
                 raise UserError("Это ссылка на плейлист или канал. Откройте нужную запись и скопируйте ссылку на неё.")
             if info.get("is_live"):
-                raise UserError("Прямые трансляции не поддерживаются — дождитесь записи.")
+                raise UserError("Прямые трансляции не поддерживаются. Дождитесь записи.")
             for field in ("subtitles", "automatic_captions"):
                 picked = _pick(info.get(field) or {})
                 if not picked:
@@ -163,7 +163,7 @@ def _info(url: str) -> dict:
         if "private" in text or "unavailable" in text or "404" in text or "not found" in text:
             raise UserError("Запись недоступна: она удалена, скрыта или в ссылке ошибка.")
         if "login" in text or "sign in" in text or "registered users" in text:
-            raise UserError("Эта запись доступна только после входа на сайте — так её не получить.")
+            raise UserError("Эта запись доступна только после входа на сайте, поэтому получить её не выйдет.")
         raise UserError("Не удалось получить запись с этого сайта. Попробуйте позже или вставьте расшифровку текстом.", 503)
 
 
@@ -206,7 +206,7 @@ def fetch_media(url: str) -> dict:
 
     if is_direct_file(url):
         if not (config.WHISPER_FALLBACK and os.getenv("GROQ_API_KEY")):
-            raise UserError("Для файлов по прямой ссылке нужно распознавание речи — оно выключено (WHISPER_FALLBACK).")
+            raise UserError("Для файлов по прямой ссылке нужно распознавание речи, а оно выключено (WHISPER_FALLBACK).")
         with tempfile.TemporaryDirectory(prefix="videoflow-") as folder:
             data = whisper.transcribe_file(_download_file(url, folder))
         name = os.path.basename(urlparse(url).path)

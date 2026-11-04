@@ -107,8 +107,16 @@ export function stagesFor(kind: Kind): [string, string][] {
     ...(kind === "text" ? [] : ([["classify", kind === "article" ? "Проверяю, что это учебный материал" : "Проверяю, что это обучающая запись"]] as [string, string][])),
     ["summary", "Пишу конспект"],
     ["keywords", "Выделяю ключевые термины"],
-    ["script", "Пишу сценарий подкаста — редактор проверяет"],
+    ["script", "Пишу сценарий подкаста, редактор его проверяет"],
   ];
+}
+
+// Russian plural: 1 материал, 2 материала, 5 материалов, 21 материал
+export function plural(n: number, one: string, few: string, many: string) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
 }
 
 export const KIND_LABEL: Record<Kind, string> = { youtube: "Видео", media: "Запись", article: "Статья", text: "Текст" };

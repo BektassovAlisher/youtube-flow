@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { thumb } from "@/lib/api";
+import CoverImage from "../../cover-image";
 
 // Places in the summary and answers open on the page itself: a timestamp plays the video here instead of a
 // new YouTube tab, a paragraph number of a pasted text opens it in the "Текст" tab.
@@ -31,7 +32,7 @@ export function Player({ id, at, onPlay, onClose }: { id: string; at: PlayAt; on
       <div className="player" data-floating={floating || undefined}>
         {at === null ? (
           <button className="player-poster" onClick={() => onPlay(0)} aria-label="Смотреть видео здесь">
-            <img className="thumb" src={thumb(id, "hqdefault")} alt="" />
+            <CoverImage src={thumb(id, "hqdefault")} label="YouTube" lazy={false} />
             <span className="play-btn" aria-hidden>▶</span>
           </button>
         ) : (
@@ -64,7 +65,6 @@ export function MediaPlayer({ url, audio, at, title }: { url: string; audio: boo
   }, [at, audio]);
   return audio ? (
     <div className="media-file">
-      <span className="cover-letter" aria-hidden>♪</span>
       <span className="media-file-title">{title}</span>
       <audio ref={(node) => void (el.current = node)} controls preload="metadata" src={url} />
     </div>

@@ -47,6 +47,8 @@ export default function Markdown({ text, material }: { text: string; material: M
             </TimestampLink>
           ),
           h2: ({ node, children }) => <h2 id={`l${node?.position?.start.line}`}>{children}</h2>,
+          // "**Содержание раздела:**" opens a paragraph as a label, not as a term: set it as one
+          strong: ({ children }) => <strong className={textOf(children).trim().endsWith(":") ? "lead" : undefined}>{children}</strong>,
         }}
       >
         {linkLocators(text, material)}

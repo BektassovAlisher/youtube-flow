@@ -64,7 +64,7 @@ def test_old_index_is_reembedded(monkeypatch):
 def test_no_transcript_and_no_index():
     seed_video(VID, transcript=False)
     rag.delete_video_index(VID)
-    with pytest.raises(UserError, match="нет транскрипта"):
+    with pytest.raises(UserError, match="нет текста для поиска"):
         rag.ensure_index(VID)
 
 

@@ -26,7 +26,7 @@ MIN_TEXT_CHARS = 300
 MAX_TEXT_CHARS = 300_000
 PARAGRAPH_CHARS = 1500  # longer blocks are split at sentence ends
 
-NO_TEXT = ("Не удалось найти на странице текст статьи — возможно, сайт показывает его только через JavaScript "
+NO_TEXT = ("Не удалось найти на странице текст статьи. Возможно, сайт показывает его только через JavaScript "
            "или за подпиской. Скопируйте текст и вставьте его вручную.")
 PAYWALL = "Сайт не пускает к статье (нужен вход или подписка). Скопируйте текст и вставьте его вручную."
 TRACKING = re.compile(r"^(utm_.*|fbclid|gclid|yclid|mc_cid|mc_eid|_hsenc|_hsmi|ref_src|spm|si|share)$")
@@ -157,7 +157,7 @@ def _pdf(data: bytes) -> tuple[list[dict], str | None]:
     """Page by page; a page becomes paragraphs at blank lines, long ones are cut at sentence ends."""
     from pypdf import PdfReader
 
-    protected = "PDF защищён паролем — снимите защиту и загрузите файл ещё раз."
+    protected = "PDF защищён паролем. Снимите защиту и загрузите файл ещё раз."
     try:
         reader = PdfReader(BytesIO(data))
         if reader.is_encrypted:
@@ -169,7 +169,7 @@ def _pdf(data: bytes) -> tuple[list[dict], str | None]:
             except Exception:
                 raise UserError(protected)
         if len(reader.pages) > MAX_PDF_PAGES:
-            raise UserError(f"В документе больше {MAX_PDF_PAGES} страниц — загрузите его частями.")
+            raise UserError(f"В документе больше {MAX_PDF_PAGES} страниц. Загрузите его частями.")
         blocks = []
         for number, page in enumerate(reader.pages, 1):
             text = re.sub(r"(\w)-\n(\w)", r"\1\2", page.extract_text() or "")  # words hyphenated at line ends
@@ -181,11 +181,11 @@ def _pdf(data: bytes) -> tuple[list[dict], str | None]:
         raise
     except Exception as e:  # pypdf.errors.PdfReadError and friends
         log.info("PDF не читается: %s", e)
-        raise UserError("Не удалось прочитать PDF — файл повреждён или это не PDF.")
+        raise UserError("Не удалось прочитать PDF: файл повреждён или это не PDF.")
     segments = _numbered(blocks)
     chars = sum(len(seg["text"]) for seg in segments)
     if chars < MIN_TEXT_CHARS:
-        raise UserError("В PDF почти нет текста — похоже, это скан. Распознавание сканов пока не поддерживается: "
+        raise UserError("В PDF почти нет текста: похоже, это скан. Распознавание сканов пока не поддерживается: "
                         "скопируйте текст и вставьте его вручную.")
     _check_length(chars, "Текст документа")
     title = (title or "").strip()
@@ -229,7 +229,7 @@ def canonical_url(raw: str) -> str:
         u = urlparse(s)
         port = u.port
     except ValueError:
-        raise UserError("Ссылка выглядит неправильной — проверьте адрес.")
+        raise UserError("Ссылка выглядит неправильной. Проверьте адрес.")
     if u.scheme not in ("http", "https") or not u.hostname:
         raise UserError("Нужна ссылка на страницу, начинающаяся с http:// или https://.")
     netloc = u.hostname.lower() + (f":{port}" if port and port not in (80, 443) else "")
@@ -249,13 +249,13 @@ def check_host(host: str, port: int) -> None:
     try:
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except (socket.gaierror, UnicodeError):
-        raise UserError("Не удалось найти сайт по этой ссылке — проверьте адрес.")
+        raise UserError("Не удалось найти сайт по этой ссылке. Проверьте адрес.")
     for *_, sockaddr in infos:
         ip = ipaddress.ip_address(sockaddr[0].split("%")[0])
         if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
             ip = ip.ipv4_mapped
         if not ip.is_global:
-            raise UserError("Эта ссылка ведёт во внутреннюю сеть — такие адреса сервер не открывает.")
+            raise UserError("Эта ссылка ведёт во внутреннюю сеть, такие адреса сервер не открывает.")
 
 
 def download(url: str) -> tuple[str, bytes, str]:
@@ -283,14 +283,14 @@ def download(url: str) -> tuple[str, bytes, str]:
             if r.status_code in (401, 402, 403):
                 raise UserError(PAYWALL)
             if r.status_code in (404, 410):
-                raise UserError("Страница не найдена — проверьте ссылку.")
+                raise UserError("Страница не найдена. Проверьте ссылку.")
             if r.status_code == 429:
                 raise UserError("Сайт ограничил частоту запросов. Попробуйте позже или вставьте текст вручную.", 503)
             if r.status_code >= 400:
                 raise UserError(f"Сайт ответил ошибкой {r.status_code}. Попробуйте позже или вставьте текст вручную.", 502)
             ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
             if ctype == "application/pdf":
-                raise UserError("По ссылке PDF — документы пока не поддерживаются. Скопируйте текст и вставьте его вручную.")
+                raise UserError("По ссылке лежит PDF. Скачайте его и загрузите на главной во вкладке «Текст или файл».")
             if ctype and ctype not in ("text/html", "application/xhtml+xml", "text/plain"):
                 raise UserError(f"По ссылке не веб-страница, а файл ({ctype}).")
             body = bytearray()
@@ -299,7 +299,7 @@ def download(url: str) -> tuple[str, bytes, str]:
                 if len(body) > MAX_BYTES:
                     raise UserError("Страница слишком большая (больше 5 МБ).")
             return current, bytes(body), ctype
-    raise UserError("Слишком много перенаправлений — откройте статью в браузере и скопируйте адрес оттуда.")
+    raise UserError("Слишком много перенаправлений. Откройте статью в браузере и скопируйте адрес оттуда.")
 
 
 def _block_text(el) -> str:

@@ -57,7 +57,7 @@ def _voice(client, voice_id: str, text: str, previous: str | None, following: st
             if status == 401:
                 raise UserError("ElevenLabs отклонил API-ключ. Проверьте ELEVENLABS_API_KEY.", status=503)
             if "quota" in body or status == 402:
-                raise UserError("Закончился лимит символов ElevenLabs — озвучка невозможна до его пополнения.", 503)
+                raise UserError("Закончился лимит символов ElevenLabs. Озвучка снова заработает, когда он пополнится.", 503)
             retryable = status in (None, 429, 500, 502, 503, 504)
             if not retryable or attempt == ATTEMPTS:
                 log.error("ElevenLabs: %s", e)
@@ -70,7 +70,7 @@ def generate_podcast_audio(script: str, on_progress: Callable[[int, int], None] 
     """MP3 of the whole dialogue. Raises instead of returning a podcast with missing lines."""
     lines = parse_script(script)
     if not lines:
-        raise UserError("В сценарии нет реплик ведущих — озвучивать нечего.")
+        raise UserError("В сценарии нет реплик ведущих, озвучивать нечего.")
     if client is None:
         from elevenlabs.client import ElevenLabs
 

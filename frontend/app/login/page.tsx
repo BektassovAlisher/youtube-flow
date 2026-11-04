@@ -8,24 +8,27 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
 
   if (!authRequired()) {
     return (
-      <div className="notice fade">
+      <div className="notice">
         <h3>Вход не нужен</h3>
         <p>Пароль приложения не задан (APP_PASSWORD), всё доступно без входа.</p>
         <p>
-          <Link href={next}>Вернуться →</Link>
+          <Link href={next}>Вернуться</Link>
         </p>
       </div>
     );
   }
 
   return (
-    <form action={login} className="login box rise">
-      <h1 className="section-title">Вход</h1>
-      <p>Смотреть конспекты можно без входа. Пароль нужен, чтобы обрабатывать новые видео, задавать вопросы, создавать аудио и удалять.</p>
+    <form action={login} className="login">
+      <h1>Вход</h1>
+      <p>Смотреть конспекты можно без входа. Пароль нужен, чтобы обрабатывать новые материалы, задавать вопросы, создавать аудио и удалять.</p>
       <input type="hidden" name="next" value={next} />
-      <input className="field" type="password" name="password" placeholder="Пароль" aria-label="Пароль" autoFocus required />
+      <div>
+        <label className="field-label" htmlFor="password">Пароль</label>
+        <input className="field" id="password" type="password" name="password" autoComplete="current-password" autoFocus required />
+      </div>
       <button className="btn primary">Войти</button>
-      {params.error && <p className="error">Неверный пароль.</p>}
+      {params.error && <p className="error" role="alert">Неверный пароль.</p>}
     </form>
   );
 }

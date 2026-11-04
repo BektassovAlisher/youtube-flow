@@ -27,7 +27,7 @@ def detect_url(raw: str) -> tuple[str, str, str]:
     try:
         host = (urlparse(s if "://" in s else "https://" + s).hostname or "").lower().removeprefix("www.")
     except ValueError:
-        raise UserError("Ссылка выглядит неправильной — проверьте адрес.")
+        raise UserError("Ссылка выглядит неправильной. Проверьте адрес.")
     if host in YOUTUBE_HOSTS:
         video_id = parse_video_id(s)
         return "youtube", video_id, watch_url(video_id)
