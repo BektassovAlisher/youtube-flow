@@ -41,3 +41,10 @@ def test_old_database_is_upgraded_in_place(tmp_path):
     with engine.connect() as conn:
         row = conn.execute(text("SELECT status, title, indexed, kind FROM videos")).one()
     assert tuple(row) == ("ready", "Старое видео", 0, "youtube")  # existing rows: fully processed YouTube videos
+
+
+def test_postgres_driver_is_installed():
+    # docker compose passes postgresql://… and SQLAlchemy 2.1 picks psycopg 3 for it: without the driver the API
+    # dies at import, before it can answer a single request. create_engine loads the driver but does not connect.
+    engine = create_engine("postgresql://postgres:secret@db:5432/lecture_agent")
+    assert engine.dialect.driver == "psycopg"
