@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque, Inter, Inter_Tight, JetBrains_Mono } from "next/font/google";
+import { cookies } from "next/headers";
 import type { CSSProperties } from "react";
+import { authRequired, SESSION_COOKIE, validSession } from "@/lib/session";
 import Header from "./header";
 import "./globals.css";
 
@@ -22,7 +24,9 @@ export const metadata: Metadata = {
   description: "Конспекты, сценарии и подкасты из обучающих видео на YouTube",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  // "off": no APP_PASSWORD, nothing to sign in to
+  const auth = !authRequired() ? "off" : validSession((await cookies()).get(SESSION_COOKIE)?.value) ? "in" : "out";
   return (
     <html
       lang="ru"
@@ -38,7 +42,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <div className="glow a" />
           <div className="glow b" />
         </div>
-        <Header />
+        <Header auth={auth} />
         <main className="wrap page">{children}</main>
       </body>
     </html>
