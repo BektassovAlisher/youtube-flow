@@ -1,21 +1,38 @@
-langgraph
-langchain
-langchain-ollama
-langchain-chroma
-langchain-google-genai
-elevenlabs
-pydantic
-python-dotenv
-youtube-transcript-api
-langchain-text-splitters
-pydub
-sqlalchemy
-psycopg2-binary
-langchain-groq
-fastapi
-fastapi[standard]
-langchain-tavily    
-rank-bm25
-langchain-huggingface
-langchain-community
-sentence-transformers
+# API
+fastapi==0.162.0
+python-multipart==0.0.33  # file uploads
+uvicorn[standard]==0.54.0
+pydantic==2.14.2
+python-dotenv==1.2.4
+requests==2.34.2
+
+# database
+sqlalchemy==2.1.8
+psycopg2-binary==2.9.13
+
+# agents and LLMs
+langgraph==1.2.19
+langchain-core==1.7.4
+langchain-google-genai==4.4.2
+langchain-groq==1.1.3
+groq==0.37.1
+langchain-tavily==0.2.18
+
+# questions about a video: vector index + BM25
+langchain-chroma==1.1.0
+chromadb==1.5.9
+fastembed==0.9.1
+langchain-text-splitters==1.1.3
+rank-bm25==0.2.2
+snowballstemmer==3.1.1
+
+# articles: main text of a web page without menus, ads and comments; uploaded PDFs
+trafilatura==2.3.1
+pypdf==6.21.4
+
+# YouTube: subtitles, and audio for speech recognition when there are none (yt-dlp needs deno for YouTube)
+youtube-transcript-api==1.2.4
+yt-dlp[default,deno]==2026.10.26
+
+# podcast audio
+elevenlabs==2.75.0

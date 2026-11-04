@@ -2,33 +2,91 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type CSSProperties } from "react";
-import ReactMarkdown from "react-markdown";
-import { api, CATEGORY, linkTimestamps, thumb, type Answer, type Recs, type VideoInfo } from "@/lib/api";
+import { useCallback, useMemo, useState } from "react";
+import { api, CATEGORY, isAudio, isMediaFile, kindLabel, lengthLabel, notEducational, siteOf, stagesFor, type Job, type Kind, type VideoInfo } from "@/lib/api";
+import CoverImage from "../../cover-image";
 import Eq from "../../eq";
+import ErrorText from "../../error-text";
+import { useLive } from "./live";
+import Markdown from "./markdown";
+import { Audio, Questions, Quiz, Recommendations, Script, SourceText, splitQuiz, Summary } from "./panels";
+import { LocateContext, MediaPlayer, Player, type PlayAt } from "./player";
 
-const TABS = ["Конспект", "Проверь себя", "Сценарий", "Аудио", "Рекомендации", "Вопросы"] as const;
+const TABS = [
+  ["summary", "Конспект"],
+  ["text", "Текст"],
+  ["quiz", "Проверь себя"],
+  ["script", "Сценарий"],
+  ["audio", "Аудио"],
+  ["recs", "Рекомендации"],
+  ["qa", "Вопросы"],
+] as const;
+type Tab = (typeof TABS)[number][0];
 
-const idx = (i: number) => ({ "--i": Math.min(i, 20) }) as CSSProperties;
+const isTab = (t: string | undefined): t is Tab => TABS.some(([k]) => k === t);
 
-export default function VideoView({ id, video }: { id: string; video: VideoInfo | null }) {
+export default function VideoView({ id, initial, apiDown, initialTab }: { id: string; initial: VideoInfo | null; apiDown: boolean; initialTab?: string }) {
   const router = useRouter();
-  const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<(typeof TABS)[number]>("Конспект");
+  const { video, setVideo, jobs, partial, failure, follow } = useLive(id, initial);
+  const [tab, setTab] = useState<Tab>(isTab(initialTab) ? initialTab : "summary");
+  const [visited, setVisited] = useState<Set<Tab>>(() => new Set([tab]));
+  const [at, setAt] = useState<PlayAt>(null);
+  const [focus, setFocus] = useState<{ n: number; key: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  // panels stay mounted once opened, so chat history, opened answers and the player survive tab switches
+  const open = useCallback((t: Tab) => {
+    setTab(t);
+    setVisited((v) => (v.has(t) ? v : new Set(v).add(t)));
+    window.history.replaceState(null, "", t === "summary" ? window.location.pathname : `?tab=${t}`);
+  }, []);
+  const locate = useMemo(
+    () => ({
+      seek: (sec: number) => setAt((p) => ({ sec, n: (p?.n ?? 0) + 1 })),
+      paragraph: (n: number) => {
+        open("text");
+        setFocus((f) => ({ n, key: (f?.key ?? 0) + 1 }));
+      },
+    }),
+    [open],
+  );
+
+  // starts a background job, then follows its progress through the events stream
+  async function run(request: () => Promise<VideoInfo | unknown>) {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await request();
+      if (result && typeof result === "object" && "video_id" in result && "status" in result) setVideo(result as VideoInfo);
+      follow();
+    } catch (e) {
+      setError(e as Error);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const process = (force = false) =>
+    run(() => api<VideoInfo>("videos", { method: "POST", body: JSON.stringify(video?.kind === "article" ? { url: video.url, force } : { url: id, force }) }));
+  // continues from the last saved step, whatever the kind of material
+  const resume = () => run(() => api<VideoInfo>(`videos/${id}/resume`, { method: "POST" }));
+  const regenerate = (part: "summary" | "script") =>
+    run(() => api<VideoInfo>(`videos/${id}/regenerate`, { method: "POST", body: JSON.stringify({ part }) }));
+  const createAudio = () => run(() => api(`videos/${id}/audio`, { method: "POST" }));
 
   async function remove() {
-    if (!confirm("Удалить видео и все материалы по нему?")) return;
+    if (!confirm("Удалить материал и всё, что по нему создано?")) return;
     try {
       await api(`videos/${id}`, { method: "DELETE" });
       router.push("/library");
     } catch (e) {
-      setError((e as Error).message);
+      setError(e as Error);
     }
   }
 
   const back = (
-    <Link href="/library" className="back eyebrow">
-      <span>←</span> Библиотека
+    <Link href="/library" className="back">
+      ← Библиотека
     </Link>
   );
 
@@ -36,385 +94,186 @@ export default function VideoView({ id, video }: { id: string; video: VideoInfo 
     return (
       <>
         {back}
-        <div className="notice fade">
-          <h3>Видео не найдено</h3>
-          <p>Возможно, его удалили. Сгенерируйте его заново на главной.</p>
+        <div className="notice">
+          {apiDown ? (
+            <>
+              <h3>Сервер API недоступен</h3>
+              <p>Обновите страницу чуть позже.</p>
+            </>
+          ) : (
+            <>
+              <h3>Материал не найден</h3>
+              <p>Его ещё не обрабатывали или удалили.</p>
+              {/^[\w-]{11}$/.test(id) && (
+                <div className="actions">
+                  <button className="btn small" onClick={() => process()} disabled={busy}>Обработать это видео</button>
+                </div>
+              )}
+            </>
+          )}
+          {error && <ErrorText error={error} />}
         </div>
       </>
     );
+
+  const kind: Kind = video.kind ?? "youtube";
+  const processJob = jobs.find((j) => j.kind === "process");
+  const audioJob = jobs.find((j) => j.kind === "audio");
   const quiz = splitQuiz(video.summary).questions;
+  const tabs = TABS.filter(([k]) => (k !== "quiz" || quiz.length > 0) && (k !== "text" || kind === "text"));
+  const meta = [kind !== "youtube" && kindLabel(video), kind === "media" && siteOf(video.url), CATEGORY[video.category ?? ""], video.language?.toUpperCase(), video.channel, lengthLabel(video)]
+    .filter((x, i, all) => x && x !== CATEGORY.unknown && all.indexOf(x) === i)
+    .join(" · ");
+
+  // the right column only when there is something to play or a real cover; a pasted text gets the full width
+  const media =
+    kind === "youtube" ? (
+      <Player id={id} at={at} onPlay={locate.seek} onClose={() => setAt(null)} />
+    ) : kind === "media" && isMediaFile(video.url) ? (
+      <MediaPlayer url={video.url} audio={isAudio(video.url)} at={at} title={video.title ?? ""} />
+    ) : video.image_url ? (
+      <Cover video={video} />
+    ) : null;
 
   return (
-    <>
+    <LocateContext.Provider value={locate}>
       {back}
 
-      <div className="vhead">
+      <div className={media ? "vhead" : "vhead solo"}>
         <div>
-          <p className="eyebrow rise">{[CATEGORY[video.category ?? ""], video.language.toUpperCase()].filter(Boolean).join(" · ")}</p>
-          <h1 className="rise" style={{ "--d": 1 } as CSSProperties}>{video.title ?? id}</h1>
-          <div className="actions rise" style={{ "--d": 2 } as CSSProperties}>
-            <a className="btn small" href={`https://www.youtube.com/watch?v=${id}`} target="_blank" rel="noreferrer">
-              Смотреть на YouTube ↗
-            </a>
-            <button className="btn small danger" onClick={remove}>Удалить</button>
+          {meta && <p className="meta">{meta}</p>}
+          <h1>{video.title ?? id}</h1>
+          <div className="actions">
+            {kind === "youtube" && (
+              <a className="btn small" href={`https://www.youtube.com/watch?v=${id}`} target="_blank" rel="noreferrer">
+                Открыть на YouTube ↗
+              </a>
+            )}
+            {(kind === "article" || kind === "media") && (
+              <a className="btn small" href={video.url} target="_blank" rel="noreferrer">
+                {kind === "article" ? "Открыть статью ↗" : "Открыть оригинал ↗"}
+              </a>
+            )}
+            <button className="btn small danger" onClick={remove} disabled={jobs.length > 0}>Удалить</button>
           </div>
-          {error && <p className="error">{error}</p>}
+          {error && <ErrorText error={error} />}
         </div>
-        <div className="media rise" style={{ "--d": 1 } as CSSProperties}>
-          <img className="thumb" src={thumb(id, "hqdefault")} alt="" />
-        </div>
+        {media && <div className="media">{media}</div>}
       </div>
 
-      <div className="tabs rise" style={{ "--d": 3 } as CSSProperties} role="tablist">
-        {TABS.filter((t) => t !== "Проверь себя" || quiz.length > 0).map((t) => (
-          <button key={t} role="tab" className="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
-            {t}
-          </button>
-        ))}
-      </div>
-
-      <section key={tab} className="panel fade" role="tabpanel">
-        {tab === "Конспект" && <Summary video={video} />}
-        {tab === "Проверь себя" && <Quiz id={id} questions={quiz} />}
-        {tab === "Сценарий" && <Script script={video.podcast_script} />}
-        {tab === "Аудио" && <Audio id={id} />}
-        {tab === "Рекомендации" && <Recommendations id={id} />}
-        {tab === "Вопросы" && <Questions id={id} />}
-      </section>
-    </>
-  );
-}
-
-function Markdown({ text, videoId }: { text: string; videoId: string }) {
-  return (
-    <div className="prose">
-      <ReactMarkdown
-        components={{
-          a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noreferrer" className={href?.includes("?t=") ? "ts" : undefined}>
-              {children}
-            </a>
-          ),
-          h2: ({ node, children }) => <h2 id={`l${node?.position?.start.line}`}>{children}</h2>,
-        }}
-      >
-        {linkTimestamps(text, videoId)}
-      </ReactMarkdown>
-    </div>
-  );
-}
-
-// The summary ends with "## Вопросы для самопроверки" + a numbered list: cut it out and render it as quiz cards.
-function splitQuiz(md: string) {
-  const lines = md.split("\n");
-  const start = lines.findIndex((l) => /^##\s*Вопросы для самопроверки/i.test(l));
-  if (start < 0) return { body: md, questions: [] };
-  let end = lines.findIndex((l, i) => i > start && /^#{1,2}\s/.test(l));
-  if (end < 0) end = lines.length;
-  const questions = lines
-    .slice(start + 1, end)
-    .map((l) => l.match(/^\s*(?:[-*]|\d+[.)])\s+(.+)/)?.[1].replace(/\*\*/g, "").trim())
-    .filter((q): q is string => !!q);
-  if (!questions.length) return { body: md, questions };
-  return { body: [...lines.slice(0, start), ...lines.slice(end)].join("\n"), questions };
-}
-
-// "## [04:12] Title" -> { id: "l<line>", ts: "04:12", title }; ids match the h2 ids set in <Markdown>
-function toc(md: string) {
-  return md.split("\n").flatMap((l, i) => {
-    const m = l.match(/^##\s+(?:\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*)?(.+)/);
-    return m ? [{ id: `l${i + 1}`, ts: m[1], title: m[2].replace(/\*\*/g, "") }] : [];
-  });
-}
-
-function Summary({ video }: { video: VideoInfo }) {
-  if (!video.summary) return <p className="muted">Конспект отсутствует.</p>;
-  const { body } = splitQuiz(video.summary);
-  const sections = toc(body);
-  return (
-    <div className="summary">
-      <div>
-        {video.keywords.length > 0 && (
-          <div className="keywords">
-            <p className="eyebrow">Ключевые термины</p>
-            <div className="chips">
-              {video.keywords.map((k) => (
-                <span key={k} className="chip">{k}</span>
-              ))}
-            </div>
+      {video.status === "rejected" ? (
+        <div className="notice" role="status">
+          <h3>{notEducational(kind)}</h3>
+          <p>Категория: {CATEGORY[video.classification?.category ?? "unknown"] ?? video.classification?.category}</p>
+          {video.classification?.reason && <p>{video.classification.reason}</p>}
+          <div className="actions">
+            <button className="btn small" onClick={() => process(true)} disabled={busy}>Всё равно обработать</button>
           </div>
-        )}
-        <Markdown text={body} videoId={video.video_id} />
-      </div>
-      {sections.length > 1 && (
-        <nav className="toc" aria-label="Содержание">
-          <p className="eyebrow">Содержание</p>
-          {sections.map((t) => (
-            <a key={t.id} href={`#${t.id}`}>
-              {t.ts && <span className="t">{t.ts}</span>}
-              {t.title}
-            </a>
-          ))}
-        </nav>
-      )}
-    </div>
-  );
-}
-
-function Quiz({ id, questions }: { id: string; questions: string[] }) {
-  return (
-    <section className="quiz">
-      <p className="muted">Сначала ответьте сами, потом откройте ответ — он строится по транскрипту видео.</p>
-      <ol className="quiz-list">
-        {questions.map((q, i) => (
-          <QuizCard key={i} id={id} n={i + 1} q={q} />
-        ))}
-      </ol>
-    </section>
-  );
-}
-
-function QuizCard({ id, n, q }: { id: string; n: number; q: string }) {
-  const [answer, setAnswer] = useState<Answer | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function reveal() {
-    setBusy(true);
-    setError(null);
-    try {
-      setAnswer(await api<Answer>(`videos/${id}/qa`, { method: "POST", body: JSON.stringify({ question: q }) }));
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <li className="quiz-card" data-open={answer ? "" : undefined}>
-      <span className="eyebrow">Вопрос {n}</span>
-      <p className="quiz-q">{q}</p>
-      {answer ? (
-        <AnswerView a={answer} id={id} />
+        </div>
+      ) : !video.summary ? (
+        <Progress
+          kind={kind}
+          job={processJob}
+          partial={partial}
+          video={video}
+          error={video.status === "failed" || failure?.kind === "process" ? (failure?.message ?? video.error) : null}
+          stuck={!processJob && video.status === "processing"}
+          busy={busy}
+          onResume={resume}
+        />
       ) : (
-        <button className="btn small" onClick={reveal} disabled={busy}>
-          {busy ? <><Eq /> Ищу ответ…</> : "Показать ответ"}
-        </button>
-      )}
-      {error && <p className="error">{error}</p>}
-    </li>
-  );
-}
-
-function AnswerView({ a, id }: { a: Answer; id: string }) {
-  return (
-    <div className="fade">
-      <Markdown text={a.answer} videoId={id} />
-      {a.sources.length > 0 && (
-        <div className="sources">
-          <span className="eyebrow">Фрагменты:</span>
-          {a.sources.map((s, j) => (
-            <a key={j} className="ts" href={s.url} target="_blank" rel="noreferrer">{s.timestamp}</a>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Script({ script }: { script: string }) {
-  const lines = script
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((l) => {
-      const i = l.indexOf(":");
-      const name = i > 0 ? l.slice(0, i).replace(/\*/g, "").trim() : "";
-      return name && name.length <= 20 ? { name, text: l.slice(i + 1).replace(/^[\s*]+/, "") } : { name: "", text: l };
-    });
-  const first = lines.find((l) => l.name)?.name;
-  if (!lines.length) return <p className="muted">Сценарий отсутствует.</p>;
-  return (
-    <dl className="dialogue">
-      {lines.map((l, i) => (
-        <div key={i} style={idx(i)}>
-          <dt className={l.name && l.name !== first ? "b" : undefined}>{l.name}</dt>
-          <dd>{l.text}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
-function Audio({ id }: { id: string }) {
-  const [state, setState] = useState<"checking" | "none" | "generating" | "ready">("checking");
-  const [src, setSrc] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  // fetched as a blob: the API doesn't serve Range requests, which Safari needs for <audio src>
-  async function load() {
-    const res = await fetch(`/api/videos/${id}/audio`);
-    if (!res.ok) return false;
-    setSrc(URL.createObjectURL(await res.blob()));
-    setState("ready");
-    return true;
-  }
-
-  useEffect(() => {
-    load().then((ok) => !ok && setState("none"));
-  }, [id]);
-  useEffect(() => () => void (src && URL.revokeObjectURL(src)), [src]);
-
-  async function generate() {
-    setState("generating");
-    setError(null);
-    try {
-      await api(`videos/${id}/audio`, { method: "POST" });
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-      setState("none");
-    }
-  }
-
-  return (
-    <div className="box">
-      {state === "checking" && <p className="inline muted"><Eq /> Проверяю аудио…</p>}
-      {state === "ready" && src && (
         <>
-          <audio controls src={src} />
-          <a className="btn small" href={src} download={`${id}.mp3`}>Скачать mp3 ↓</a>
-        </>
-      )}
-      {state === "none" && (
-        <>
-          <p>Аудиоверсия ещё не создана. Сценарий озвучат два голоса ElevenLabs — это занимает 1–3 минуты.</p>
-          <button className="btn primary" onClick={generate}>Создать аудио</button>
-        </>
-      )}
-      {state === "generating" && (
-        <p className="inline accent"><Eq /> Идёт озвучка…</p>
-      )}
-      {error && <p className="error">{error}</p>}
-    </div>
-  );
-}
-
-function hostname(url: string) {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url;
-  }
-}
-
-function Recommendations({ id }: { id: string }) {
-  const [recs, setRecs] = useState<Recs | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function find() {
-    setBusy(true);
-    setError(null);
-    try {
-      setRecs(await api<Recs>(`videos/${id}/recommend`, { method: "POST" }));
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (!recs)
-    return (
-      <div className="box">
-        <p>Подберём онлайн-курсы и книги по теме видео через веб-поиск.</p>
-        <button className="btn primary" onClick={find} disabled={busy}>
-          {busy ? <><Eq /> Ищу…</> : "Найти курсы и книги"}
-        </button>
-        {error && <p className="error">{error}</p>}
-      </div>
-    );
-
-  return (
-    <div className="recs">
-      {([["Курсы", recs.courses], ["Книги", recs.books]] as const).map(([title, items]) => (
-        <div key={title}>
-          <p className="eyebrow">{title}</p>
-          {items.length ? (
-            <ul>
-              {items.map((r, i) => (
-                <li key={r.url} style={idx(i)}>
-                  <a href={r.url} target="_blank" rel="noreferrer">
-                    <span className="rec-title">{r.title || r.url}</span>
-                    <span className="arrow">↗</span>
-                    <span className="eyebrow">{hostname(r.url)}</span>
-                  </a>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="muted">Ничего не найдено.</p>
+          {processJob && processJob.stage !== "summary" && (
+            <p className="banner" role="status">
+              <Eq /> Конспект готов. Сценарий подкаста ещё пишется и появится во вкладке «Сценарий».
+            </p>
           )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-const SUGGESTIONS = ["О чём это видео?", "Какие главные выводы?", "Объясни ключевые термины простыми словами"];
-
-function Questions({ id }: { id: string }) {
-  const [items, setItems] = useState<{ q: string; a?: Answer; error?: string }[]>([]);
-  const [input, setInput] = useState("");
-  const pending = items.some((i) => !i.a && !i.error);
-
-  async function ask(q: string) {
-    if (!q.trim() || pending) return;
-    setInput("");
-    setItems((prev) => [...prev, { q }]);
-    const done = (patch: { a?: Answer; error?: string }) =>
-      setItems((prev) => prev.map((it, i) => (i === prev.length - 1 ? { ...it, ...patch } : it)));
-    try {
-      done({ a: await api<Answer>(`videos/${id}/qa`, { method: "POST", body: JSON.stringify({ question: q }) }) });
-    } catch (e) {
-      done({ error: (e as Error).message });
-    }
-  }
-
-  return (
-    <div className="chat">
-      {items.length === 0 && (
-        <>
-          <p className="muted">Ответы строятся по транскрипту видео, со ссылками на нужные моменты.</p>
-          <div className="suggest">
-            {SUGGESTIONS.map((s) => (
-              <button key={s} className="btn small" onClick={() => ask(s)}>{s}</button>
+          <div className="tabs" role="tablist" aria-label="Разделы материала">
+            {tabs.map(([k, label]) => (
+              <button key={k} role="tab" className="tab" aria-selected={tab === k} onClick={() => open(k)}>
+                {label}
+              </button>
             ))}
           </div>
+          {tabs.map(([k]) =>
+            visited.has(k) ? (
+              <section key={k} className="panel" role="tabpanel" hidden={tab !== k}>
+                {k === "summary" && <Summary video={video} busy={busy || !!processJob} onRegenerate={() => regenerate("summary")} />}
+                {k === "text" && <SourceText id={id} focus={focus} />}
+                {k === "quiz" && <Quiz material={video} questions={quiz} />}
+                {k === "script" && (
+                  <Script video={video} job={processJob} failure={failure} busy={busy} onCreate={resume} onRegenerate={() => regenerate("script")} />
+                )}
+                {k === "audio" && <Audio video={video} job={audioJob} failure={failure} busy={busy} onCreate={createAudio} />}
+                {k === "recs" && <Recommendations id={id} initial={video.recommendation} />}
+                {k === "qa" && <Questions material={video} />}
+              </section>
+            ) : null,
+          )}
         </>
       )}
+    </LocateContext.Provider>
+  );
+}
 
-      {items.map((it, i) => (
-        <div key={i} className="qa fade">
-          <div className="q">{it.q}</div>
-          {it.a && <AnswerView a={it.a} id={id} />}
-          {it.error && <p className="error">{it.error}</p>}
-          {!it.a && !it.error && <p className="inline accent"><Eq /> Ищу ответ в транскрипте…</p>}
+// an article's or a recording's cover, linking to the original (the site's name if the picture fails to load)
+function Cover({ video }: { video: VideoInfo }) {
+  const label = video.kind === "media" ? siteOf(video.url) : video.channel || siteOf(video.url);
+  return (
+    <a className="cover" href={video.url} target="_blank" rel="noreferrer" aria-label="Открыть оригинал">
+      <CoverImage src={video.image_url} label={label} lazy={false} />
+    </a>
+  );
+}
+
+function Progress({ kind, job, partial, video, error, stuck, busy, onResume }: {
+  kind: Kind; job?: Job; partial: string; video: VideoInfo; error: string | null; stuck: boolean; busy: boolean; onResume: () => void;
+}) {
+  const stages = stagesFor(kind);
+  const current = stages.findIndex(([key]) => key === job?.stage);
+  const active = job ? Math.max(current, 0) : -1;
+  return (
+    <section className="progress">
+      {error ? (
+        <div className="notice" role="alert">
+          <h3>Не получилось обработать {{ youtube: "видео", media: "запись", article: "статью", text: "текст" }[kind]}</h3>
+          <p>{error}</p>
+          <div className="actions">
+            <button className="btn small" onClick={onResume} disabled={busy}>Попробовать ещё раз</button>
+          </div>
         </div>
-      ))}
-
-      <form
-        className="form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          ask(input);
-        }}
-      >
-        <input className="field" placeholder="Спросите что-нибудь по видео" aria-label="Вопрос" value={input} onChange={(e) => setInput(e.target.value)} />
-        <button className="btn primary" disabled={pending || !input.trim()}>Спросить →</button>
-      </form>
-    </div>
+      ) : (
+        <>
+          <ol className="stages" aria-live="polite">
+            {stages.map(([key, label], i) => (
+              <li key={key} data-state={i < active ? "done" : i === active ? "active" : undefined}>
+                <span className="stage-mark">{i < active ? "✓" : i === active ? <Eq /> : ""}</span>
+                {label}
+              </li>
+            ))}
+          </ol>
+          <p className="stages-hint muted">
+            {job?.status === "queued"
+              ? "В очереди: сервер сейчас обрабатывает другие материалы."
+              : "Страницу можно закрыть: обработка продолжится на сервере, а конспект появится здесь."}
+          </p>
+          {stuck && (
+            <div className="notice">
+              <p>Обработка не идёт. Возможно, сервер перезапускался.</p>
+              <div className="actions">
+                <button className="btn small" onClick={onResume} disabled={busy}>Продолжить</button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+      {partial && !error && (
+        <div className="live-summary">
+          <p className="meta">Конспект пишется прямо сейчас</p>
+          <Markdown text={partial} material={video} />
+          <span className="live-caret" aria-hidden />
+        </div>
+      )}
+    </section>
   );
 }

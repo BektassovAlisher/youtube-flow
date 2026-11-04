@@ -1,516 +1,351 @@
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_groq import ChatGroq
-from typing import TypedDict, List, Annotated
+"""Graph nodes. Every node saves its result right away and skips work that is already saved, so a run
+cut short (an error, a restart) resumes where it stopped instead of starting over."""
 import json
-from tools.youtube_scraper import YoutubeExtractTool
-from tools.chunking_transcript import ChukingTranscript
-from tools.audio_generator import AudioGeneratorTool
-from dotenv import load_dotenv
-import os
-import operator
-from db.database import init_db
-from db.cache import (
-    get_cached_video, save_to_cache,
-    get_cached_audio, save_audio_to_cache,
-    get_cached_recommendation, save_recommendation_to_cache,
-)
-from agent.chat_agent.rag import index_video, ask
-from agent.agent_state import GraphState, extract_text, gemini, gpt_120b, gpt_20b
-from langchain_tavily import TavilySearch
+import logging
+import re
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
-init_db()
+from langgraph.config import get_stream_writer
 
-GROQ_CHAR_LIMIT = 8000
+import config
+from agent import agent_state as llm
+from agent import prompts
+from agent.agent_state import GraphState, extract_text
+from agent.chat_agent import rag
+from db import cache as repo
+from errors import UserError
+from tools import sources
+from tools.chunking_transcript import plain_text, to_timestamped_text
+from tools.media import fetch_media
+from tools.text_sources import fetch_article, word_count
+from tools.youtube_scraper import duration_of, fetch_metadata, get_transcript
 
-def _truncate(text: str, limit: int = GROQ_CHAR_LIMIT) -> str:
-    if len(text) <= limit:
+log = logging.getLogger(__name__)
+
+HOSTS = ("Алекс", "Марина")
+CATEGORIES = {"educational", "entertainment", "news", "random", "music", "gaming", "advertising"}
+GROQ_CHAR_LIMIT = 8000  # keeps Groq requests within the free-tier tokens-per-minute budget
+GEMINI_CHAR_LIMIT = 60000  # Gemini reads a whole podcast script
+TEMPLATE_LABELS = {"содержание раздела", "ключевые понятия и определения", "важные идеи и факты",
+                   "примеры и иллюстрации", "связи с другими темами"}
+
+
+def _emit(**event) -> None:
+    try:
+        get_stream_writer()(event)
+    except Exception:  # noqa: BLE001 — not inside a streaming run (tests calling a node directly)
+        pass
+
+
+def _stage(video_id: str, stage: str) -> None:
+    repo.set_stage(video_id, stage)
+    _emit(stage=stage)
+
+
+def _truncate(text: str, limit: int | None = None) -> str:
+    if limit is None:
+        limit = GROQ_CHAR_LIMIT if config.CHECKS_PROVIDER == "groq" else GEMINI_CHAR_LIMIT
+    return text if len(text) <= limit else text[:limit] + "\n... [текст обрезан]"
+
+
+def _parse_json(raw: str, kind: type):
+    text = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}" if kind is dict else r"\[.*\]", text, re.S)
+        if not match:
+            return None
+        try:
+            value = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    if kind is list and isinstance(value, dict):  # {"keywords": [...]} in place of the bare list
+        value = next((v for v in value.values() if isinstance(v, list)), value)
+    return value if isinstance(value, kind) else None
+
+
+def load_node(state: GraphState):
+    """What earlier runs already produced for this video."""
+    video = repo.get_video(state["video_id"])
+    if not video:
+        return {}
+    out = {
+        "kind": video["kind"],
+        "url": video["url"],
+        "anchors": video["anchors"],
+        "title": video["title"],
+        "channel": video["channel"],
+        "language": video["language"] or "ru",
+        "force": bool(state.get("force") or video["force"]),
+        "indexed": video["indexed"],
+    }
+    for key in ("classification", "summary", "keywords", "podcast_script"):
+        if video.get(key):
+            out[key] = video[key]
+    segments = repo.load_transcript(state["video_id"])
+    if segments:
+        out["segments"] = segments
+    return out
+
+
+def _article(state: GraphState):
+    video_id = state["video_id"]
+    article = fetch_article(state["url"])
+    segments, words = article["segments"], word_count(article["segments"])
+    repo.save_transcript(video_id, segments, language=article["language"], source="article", duration_sec=None,
+                         title=article["title"], channel=article["site"], image_url=article["image"],
+                         word_count=words, anchors=article["anchors"])
+    _emit(meta={"title": article["title"], "channel": article["site"], "language": article["language"]})
+    log.info("%s: статья, %d абзацев, %d слов", video_id, len(segments), words)
+    return {"segments": segments, "language": article["language"], "title": article["title"],
+            "channel": article["site"], "anchors": article["anchors"], "agent_execution_order": ["transcript"]}
+
+
+def _media(state: GraphState):
+    video_id = state["video_id"]
+    rec = fetch_media(state["url"])
+    segments = rec["segments"]
+    repo.save_transcript(video_id, segments, language=rec["language"], source=rec["source"],
+                         duration_sec=rec["duration_sec"], title=rec["title"], channel=rec["channel"],
+                         image_url=rec["image"])
+    _emit(meta={"title": rec["title"], "channel": rec["channel"], "language": rec["language"]})
+    log.info("%s: запись, %d сегментов, источник %s", video_id, len(segments), rec["source"])
+    return {"segments": segments, "language": rec["language"], "title": rec["title"], "channel": rec["channel"],
+            "agent_execution_order": ["transcript"]}
+
+
+def transcript_node(state: GraphState):
+    """Subtitles (or recognized speech) of a recording, or the text of an article; pasted text arrives with
+    the request and is already saved."""
+    if state.get("segments"):
+        return {}
+    video_id = state["video_id"]
+    _stage(video_id, "transcript")
+    if state.get("kind") == "article":
+        return _article(state)
+    if state.get("kind") == "media":
+        return _media(state)
+    with ThreadPoolExecutor(1) as pool:  # title and channel arrive while the subtitles download
+        meta = pool.submit(fetch_metadata, video_id)
+        data = get_transcript(video_id)
+        meta = meta.result()
+    segments = data["segments"]
+    title = data.get("title") or meta["title"] or state.get("title") or f"Видео {video_id}"
+    channel = data.get("channel") or meta["channel"]
+    duration = duration_of(segments)
+    repo.save_transcript(video_id, segments, language=data["language"], source=data["source"],
+                         duration_sec=duration, title=title, channel=channel)
+    _emit(meta={"title": title, "channel": channel, "language": data["language"], "duration_sec": duration})
+    log.info("%s: %d сегментов, %.0f мин, источник %s", video_id, len(segments), duration / 60, data["source"])
+    return {"segments": segments, "language": data["language"], "title": title, "channel": channel,
+            "agent_execution_order": ["transcript"]}
+
+
+def _samples(segments: list[dict], size: int = 900) -> str:
+    """The start, two middle points and the end: intros are often greetings or ads."""
+    text = plain_text(segments)
+    if len(text) <= size * 4:
         return text
-    return text[:limit] + "\n... [текст обрезан из-за лимита токенов]"
+    picks = []
+    for label, fraction in (("Начало", 0.0), ("Первая треть", 0.3), ("Середина", 0.55), ("Конец", 1.0)):
+        start = min(int(len(text) * fraction), len(text) - size)
+        if start:
+            start = text.find(" ", start) + 1
+        picks.append(f"[{label}] {text[start:start + size]}")
+    return "\n\n".join(picks)
 
-
-def extract_transcript(state: GraphState):
-    extractor = YoutubeExtractTool()
-    chunking = ChukingTranscript()
-    text = extractor.process_video(state["video_url"])
-    splitted_text = chunking.to_timestamped_text(text.segments)
-    documents = chunking.split(text.segments, text.metadata["video_id"])
-    return {"transcript": splitted_text,
-            "video_metadata": text.metadata,
-            "segments": text.segments,
-            "documents": documents
-            }
-    
 
 def classify_node(state: GraphState):
-    print("🔍 Агент 1: Классифицирую видео...")
-    
-    transcript = state["transcript"]
-    metadata = state["video_metadata"]
-    
-    prompt = f"""Ты — классификатор видео-контента.
-
-Перед тобой транскрипт видео и метаданные.
-
----МЕТАДАННЫЕ---
-Название: {metadata.get("title", "Неизвестно")}
----ТРАНСКРИПТ (первые 2000 символов)---
-{transcript[:2000]}
----КОНЕЦ---
-
-Определи тип видео. Верни ТОЛЬКО валидный JSON:
-{{
-    "category": "educational" | "entertainment" | "news" | "random" | "music" | "gaming",
-    "is_suitable": true/false,
-    "confidence": 0.0-1.0,
-    "reason": "краткое объяснение"
-}}
-
-is_suitable = true ТОЛЬКО если это обучающий/образовательный контент (лекция, туториал, курс, объяснение концепций).
-Без markdown, без ```json.
-"""
-    
-    result = gpt_20b.invoke(prompt)
-    raw = extract_text(result).strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    
-    fallback = {"category": "unknown", "is_suitable": True, "confidence": 0.6, "reason": "parse error"}
+    if state.get("classification"):
+        return {}
+    video_id = state["video_id"]
+    if state.get("kind") == "text":  # pasted on purpose: nothing to filter out
+        classification = {"category": "unknown", "is_suitable": True, "confidence": 1.0,
+                          "reason": "Текст добавлен вручную."}
+        repo.save_classification(video_id, classification)
+        return {"classification": classification}
+    _stage(video_id, "classify")
+    segments = state["segments"]
+    if state.get("kind") == "article":
+        prompt = prompts.CLASSIFY_ARTICLE.format(
+            title=state.get("title") or "неизвестно", site=state.get("channel") or "неизвестно",
+            words=word_count(segments), samples=_samples(segments),
+        )
+    else:
+        prompt = prompts.CLASSIFY.format(
+            title=state.get("title") or "неизвестно", channel=state.get("channel") or "неизвестно",
+            minutes=round(duration_of(segments) / 60), samples=_samples(segments),
+        )
+    fallback = {"category": "unknown", "is_suitable": True, "confidence": 0.6, "reason": "классификатор не ответил"}
     try:
-        classification = {**fallback, **json.loads(raw)}
-    except Exception:
-        classification = fallback
-    
-    print(f"📊 Категория: {classification['category']} | Подходит: {classification['is_suitable']} | Уверенность: {classification['confidence']}")
-    
-    return {
-        "video_category": classification["category"],
-        "is_suitable": classification["is_suitable"],
-        "classification_confidence": classification["confidence"],
-        "classification_reason": classification["reason"],
-        "agent_execution_order": ["classify"]
+        parsed = _parse_json(extract_text(llm.checker("small").invoke(prompt)), dict) or {}
+    except Exception as e:  # noqa: BLE001 — a failed check must not block the summary
+        log.warning("классификатор недоступен: %s", e)
+        parsed = {}
+    c = {**fallback, **parsed}
+    category = str(c.get("category", "unknown")).lower()
+    try:
+        confidence = min(1.0, max(0.0, float(c.get("confidence", 0.6))))
+    except (TypeError, ValueError):
+        confidence = 0.6
+    classification = {
+        "category": category if category in CATEGORIES else "unknown",
+        "is_suitable": bool(c.get("is_suitable")),
+        "confidence": confidence,
+        "reason": str(c.get("reason") or ""),
     }
+    repo.save_classification(video_id, classification)
+    log.info("%s: %s", video_id, classification)
+    return {"classification": classification, "agent_execution_order": ["classify"]}
 
 
 def route_classify(state: GraphState):
-    if state.get("is_suitable") and state.get("classification_confidence", 1.0) >= 0.6:
+    c = state.get("classification") or {}
+    if state.get("force") or (c.get("is_suitable") and c.get("confidence", 1.0) >= 0.6):
         return "start_pipeline"
-    else:
-        return "reject"
+    return "reject"
+
 
 def reject_node(state: GraphState):
-    reason = state.get("classification_reason", "")
-    category = state.get("video_category", "unknown")
-    print(f"🚫 Видео отклонено. Категория: {category}. Причина: {reason}")
-    return {
-        "summary": f"❌ Видео не подходит для обработки.\nКатегория: {category}\nПричина: {reason}\n\nПожалуйста, выберите образовательное видео (лекция, туториал, курс).",
-        "audio_path": "rejected",
-        "agent_execution_order": ["reject"]
-    }
+    repo.reject(state["video_id"])
+    _emit(rejected=state.get("classification"))
+    return {"rejected": True, "agent_execution_order": ["reject"]}
+
+
+def start_pipeline_node(state: GraphState):
+    return {}
+
 
 def summarize_node(state: GraphState):
-    print("📝 Агент 2: Пишу конспект...")
-    
-    transcript = state["transcript"]
-    language = state["video_metadata"]["language"]
-
-    prompt = f"""Ты — эксперт по составлению подробных учебных конспектов.
-
-Перед тобой транскрипт лекции с временными метками в формате [MM:SS].
-
----ТРАНСКРИПТ---
-{transcript}
----КОНЕЦ---
-
-Составь максимально подробный и информативный конспект. Твоя задача — сохранить ВСЮ важную информацию из лекции, не упустив ни одной значимой идеи, примера или объяснения.
-
-Формат:
-
-## Обзор лекции
-5-7 предложений: о чём лекция, какие главные идеи разбираются, что слушатель должен понять и запомнить после её изучения.
-
----
-
-## [MM:SS] Название раздела
-
-**Содержание раздела:**
-Подробный пересказ этого раздела в 5-10 предложениях. Включи все объяснения, логику рассуждений и выводы лектора — не сокращай и не упрощай.
-
-**Ключевые понятия и определения:**
-- **Термин**: развёрнутое определение на 2-4 предложения с пояснением смысла и контекста
-
-**Важные идеи и факты:**
-- Подробное описание идеи или факта (2-4 предложения, не просто назывное предложение)
-
-**Примеры и иллюстрации:**
-- Конкретный пример из лекции с объяснением, что он демонстрирует
-
-**Связи с другими темами:**
-- Как эта тема связана с другими разделами лекции или смежными концепциями
-
----
-
-(повторить блок для каждого раздела)
-
----
-
-## Все ключевые понятия (сводный глоссарий)
-- **Термин**: развёрнутое определение на 2-3 предложения
-
-## Главные выводы лекции
-5-7 пунктов — самые важные мысли, которые нужно вынести из всей лекции. Каждый пункт — 2-3 предложения, не просто заголовок.
-
-## Вопросы для самопроверки
-3-5 вопросов, которые проверяют понимание ключевых идей лекции.
-
-Правила:
-- Отвечай строго на русском языке, даже если транскрипт на другом языке
-- Английские технические термины, названия технологий, библиотек и аббревиатуры оставляй на английском (например: neural network → нейронная сеть, но PyTorch, API, LLM, transformer — без перевода)
-- Указывай реальные таймстампы из транскрипта у каждого раздела
-- Выделяй жирным все технические термины при первом упоминании
-- Не сокращай объяснения лектора — передавай суть полно и точно
-- Если лектор приводит аналогию или историю — включи её в конспект
-- Минимальный объём каждого раздела — 150 слов
-"""
-
-    result = gemini.invoke(prompt)
-    print("✅ Конспект готов")
-    print(extract_text(result))
-    return {
-        "summary": extract_text(result),
-        "agent_execution_order" : ["summary"]
-        }
+    if state.get("summary"):
+        return {}
+    video_id = state["video_id"]
+    _stage(video_id, "summary")
+    kind = state.get("kind", "youtube")
+    if kind in ("youtube", "media"):
+        prompt = prompts.SUMMARY.format(transcript=to_timestamped_text(state["segments"]))
+    else:
+        prompt = prompts.SUMMARY_TEXT.format(what="статьи" if kind == "article" else "учебного материала",
+                                             text=sources.prompt_text(state["segments"]))
+    parts = []
+    for chunk in llm.gemini().stream(prompt):  # tokens go straight to the page that waits for the summary
+        text = chunk.text
+        if text:
+            parts.append(text)
+            _emit(token=text)
+    summary = "".join(parts).strip()
+    if not summary:
+        raise UserError("Модель вернула пустой конспект. Попробуйте ещё раз.", status=503)
+    repo.save_summary(video_id, summary)  # saved before anything else can fail
+    _emit(summary_saved=True)
+    return {"summary": summary, "agent_execution_order": ["summary"]}
 
 
-
-def keyword_node(state:GraphState):
-
-    trasnscript = state["transcript"]
-    language = state["video_metadata"]["language"]
-    prompt = f"""Ты — эксперт по анализу образовательного контента.
-
-Перед тобой конспект лекции.
-
----КОНСПЕКТ---
-{_truncate(trasnscript)}
----КОНЕЦ---
-
-Твоя задача — извлечь ключевые термины и понятия из этого конспекта.
-
-Правила:
-- Извлеки 10-15 самых важных терминов
-- Только технические термины и ключевые понятия — не общие слова
-- Верни ТОЛЬКО валидный JSON массив строк
-- Без пояснений, без markdown, без ```json
-- Пример формата: ["термин1", "термин2", "термин3"]
-
-Термины должны быть:
-- Конкретными (не "метод" а "градиентный спуск")
-- На языке конспекта
-- Отсортированы по важности — самые главные первыми
-- Технические термины, названия библиотек и аббревиатуры пиши на на английском: LLM, PyTorch, transformer
-- Общеобразовательные понятия и описания пиши на русском
-
-"""
-    
+def _summary_terms(summary: str) -> tuple[str, list[tuple[str, int]]]:
+    headings = [re.sub(r"\[\d{1,2}:\d{2}(?::\d{2})?\]\s*", "", line[3:]).strip()
+                for line in summary.splitlines() if line.startswith("## ")]
+    counts, first = Counter(), {}
+    for i, match in enumerate(re.finditer(r"\*\*([^*\n]{2,60}?)\*\*", summary)):
+        term = match.group(1).strip(" :.,;")
+        key = term.lower()
+        if not term or key in TEMPLATE_LABELS:
+            continue
+        counts[key] += 1
+        first.setdefault(key, (i, term))
+    ranked = sorted(counts, key=lambda k: (-counts[k], first[k][0]))
+    return "\n".join(headings)[:2000], [(first[k][1], counts[k]) for k in ranked[:80]]
 
 
-    result = gpt_120b.invoke(prompt)
-    raw = extract_text(result).strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+def _clean_keywords(values) -> list[str]:
+    seen, out = set(), []
+    for v in values or []:
+        if not isinstance(v, str):
+            continue
+        term = v.strip().strip(" .,;:")
+        if term and len(term) <= 60 and term.lower() not in seen:
+            seen.add(term.lower())
+            out.append(term)
+    return out[:15]
+
+
+def keywords_node(state: GraphState):
+    """Terms of the whole lecture: picked from the summary's outline, not from the first minutes of the transcript."""
+    if state.get("keywords"):
+        return {}
+    video_id = state["video_id"]
+    _stage(video_id, "keywords")
+    headings, terms = _summary_terms(state["summary"])
+    keywords = []
+    if terms:
+        prompt = prompts.KEYWORDS.format(headings=headings or "(нет)",
+                                         terms=_truncate("\n".join(f"{t} ({n})" for t, n in terms), 3000))
+        try:
+            keywords = _clean_keywords(_parse_json(extract_text(llm.checker().invoke(prompt)), list))
+        except Exception as e:  # noqa: BLE001
+            log.warning("ключевые слова: модель недоступна (%s), беру самые частые термины", e)
+    if not keywords:
+        keywords = _clean_keywords([t for t, _ in terms])[:12]
+    repo.save_keywords(video_id, keywords)
+    return {"keywords": keywords, "agent_execution_order": ["keywords"]}
+
+
+def index_node(state: GraphState):
+    """Vector index for questions. A failure here only postpones it: questions rebuild it on demand."""
+    if state.get("indexed") or not state.get("segments"):
+        return {}
+    video_id = state["video_id"]
+    kind = state.get("kind", "youtube")
+    link_for = sources.link_builder(kind, state.get("url"), state.get("anchors"))
+    time_link = sources.time_builder(kind, state.get("url"), video_id)
     try:
-        keywords = json.loads(raw)
-    except json.JSONDecodeError:
-        keywords = []
-    if not isinstance(keywords, list):
-        keywords = []
-    print(f"✅ Ключевые слова: {keywords}")
-    return {"keywords": keywords,
-            "agent_execution_order" : ["keywords"]
-            }
+        rag.index_video(video_id, state["segments"], link_for, time_link)
+        repo.mark_indexed(video_id)
+        return {"indexed": True}
+    except Exception as e:  # noqa: BLE001
+        log.warning("%s: индексация отложена: %s", video_id, e)
+        return {"indexed": False}
 
 
-characters = {
-    "ru": ("Алекс", "Марина"),
-    "en": ("Alex", "Marina"),
-}
+def route_after_keywords(state: GraphState):
+    return "end" if state.get("podcast_script") else "script"
+
 
 def script_node(state: GraphState):
-    print("🎙️ Агент 4: Пишу сценарий подкаста...")
+    video_id = state["video_id"]
+    _stage(video_id, "script")
+    prompt = prompts.SCRIPT.format(summary=state["summary"], keywords=", ".join(state.get("keywords") or []),
+                                   host1=HOSTS[0], host2=HOSTS[1])
+    if state.get("retry_count", 0) > 0 and state.get("critic_feedback"):
+        prompt += prompts.SCRIPT_RETRY.format(feedback=state["critic_feedback"])
+    script = extract_text(llm.gemini().invoke(prompt)).strip()
+    if not script:
+        raise UserError("Модель вернула пустой сценарий. Попробуйте ещё раз.", status=503)
+    return {"podcast_script": script, "agent_execution_order": ["script"]}
 
-    summary = state["summary"]
-    keywords = ", ".join(state["keywords"])
-    language = state["video_metadata"]["language"]
 
-    if "retry_count" not in state:
-        state["retry_count"] = 0
-
-    host1, host2 = characters.get(language, ("Alex", "Marina"))
-    prompt = f"""Ты — сценарист образовательного подкаста.
-
-Перед тобой конспект лекции и ключевые термины.
-
----КОНСПЕКТ---
-{summary}
----КОНЕЦ---
-
-Ключевые термины которые нужно упомянуть: {keywords}
-
-Напиши диалог между двумя ведущими подкаста:
-- Алекс — новичок, задаёт простые вопросы, удивляется
-- Марина — эксперт, объясняет понятно и с примерами
-
-Структура диалога:
-1. Вступление — о чём будет выпуск (2 реплики)
-2. Основная часть — разбор главных идей (6-8 реплик)
-3. Заключение — главный вывод и зачем это знать (2 реплики)
-
-Правила:
-- Строго в формате "Имя: текст" каждая реплика с новой строки
-- Каждая реплика 1-3 предложения — не длиннее
-- Упомяни минимум 5 терминов из списка ключевых
-- Объясняй термины простыми словами через реплики Марины
-- Без ремарок, без описаний действий, только диалог
-- Отвечай строго на русском языке, даже если транскрипт на другом языке
-- Английские технические термины, названия технологий, библиотек и аббревиатуры оставляй на английском (например: neural network → нейронная сеть, но PyTorch, API, LLM, transformer — без перевода)
-
-Пример формата:
-{host1}: текст реплики
-{host2}: текст реплики
-"""
-    
-    if state.get("critic_feedback") and state.get("retry_count", 0) > 0:
-        prompt += f"""
-        \n\nВНИМАНИЕ! Прошлая версия сценария была отклонена редактором.
-        Комментарий редактора: {state['critic_feedback']}
-        
-        Пожалуйста, исправь ошибки и напиши сценарий заново, учитывая этот комментарий.
-        """
-
-    result = gemini.invoke(prompt)
-    print("✅ Сценарий готов")
-    print(extract_text(result))
-    return {"podcast_script": extract_text(result)}  
-
-def critic_node(state:GraphState):
-    script = state.get("podcast_script", "")
-    keywords = state.get("keywords", [])
-    retry_count = state.get("retry_count", 0)
-    language = state["video_metadata"]["language"]
-
-    prompt = f"""Ты — строгий редактор подкаста. Твоя задача проверить сценарий.
-    
-    Сценарий:
-    {_truncate(script)}
-    
-    Обязательные ключевые слова (нужно использовать минимум 5): 
-    {', '.join(keywords)}
-
-    Проверь сценарий по двум критериям:
-    1. Формат строго "Имя: текст" в каждой строке диалога. Нет ли лишних описаний действий?
-    2. Использовано ли как минимум 5 ключевых слов из списка?
-    3. Посчитай сколько именно ключевых слов найдено в тексте. 
-    4. Если меньше 5 — is_valid: false обязательно.
-
-    Верни ТОЛЬКО валидный JSON в формате:
-    {{
-        "is_valid": true/false,
-        "feedback": "Если false, напиши что исправить. Если true, напиши 'Одобрено'"
-    }}
-    Отвечай строго на языке: {language} (для фидбека).
-    """
-
-    result = gpt_120b.invoke(prompt)
-    raw = extract_text(result).strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-
-    fallback = {"is_valid": True, "feedback": "JSON parse error, пропускаем."}
+def critic_node(state: GraphState):
+    prompt = prompts.CRITIC.format(script=_truncate(state.get("podcast_script", "")),
+                                   keywords=", ".join(state.get("keywords") or []))
     try:
-        critic_result = {**fallback, **json.loads(raw)}
-    except Exception:
-        critic_result = fallback
-    
-    print(f"  📝 Вердикт критика: {critic_result['is_valid']} | Фидбек: {critic_result['feedback']}")
-
-    return {
-        "critic_feedback" : critic_result["feedback"],
-        "retry_count": retry_count + 1,
-        "is_valid": critic_result["is_valid"]
-    }
+        verdict = _parse_json(extract_text(llm.checker().invoke(prompt)), dict) or {}
+    except Exception as e:  # noqa: BLE001 — the editor is optional: keep the script
+        log.warning("критик недоступен: %s", e)
+        verdict = {}
+    verdict = {"is_valid": True, "feedback": "", **verdict}
+    log.info("критик: %s", verdict)
+    return {"is_valid": bool(verdict["is_valid"]), "critic_feedback": str(verdict["feedback"]),
+            "retry_count": state.get("retry_count", 0) + 1, "agent_execution_order": ["critic"]}
 
 
 def route_critic(state: GraphState):
-    is_valid = state.get("is_valid", False)
-    retry_count = state.get("retry_count", 0)
-    max_retries = state.get("max_retries", 2)
-
-    if is_valid or retry_count >= max_retries:
-        return "save_to_db"
-
+    if state.get("is_valid") or state.get("retry_count", 0) >= state.get("max_retries", 2):
+        return "save_script"
     return "script"
 
 
-def audio_node(state: GraphState):
-    video_id = state["video_metadata"]["video_id"]
-    audio_url = f"/videos/{video_id}/audio"
-
-    if get_cached_audio(video_id):
-        print(f"💾 Аудио найдено в БД, пропускаю генерацию: {video_id}")
-        return {"audio_path": audio_url}
-
-    print("🎙️ Агент 5: Генерирую аудио через ElevenLabs...")
-    audio_tool = AudioGeneratorTool()
-    try:
-        audio_bytes = audio_tool.generate_podcast_audio(
-            script=state["podcast_script"],
-            language=state["video_metadata"]["language"],
-        )
-        save_audio_to_cache(video_id, audio_bytes)
-        return {"audio_path": audio_url}
-    except Exception as e:
-        print(f"🚨 Ошибка в audio_node: {e}")
-        return {"audio_path": "error"}
-
-def merge_node(state: GraphState):
-    return {}
-
-# runs first: an already processed video (any link form) is served from the DB without YouTube or LLM calls
-def cache_node(state:GraphState):
-    video_id = YoutubeExtractTool().extract_video_id(state["video_url"])
-    cached= get_cached_video(video_id)
-
-    if cached:
-        print(f"💾 Найдено в кэше: {video_id}")
-        return {
-            "video_metadata": {
-                "video_id": video_id,
-                "title": cached["title"],
-                "language": cached["language"],
-                "video_url": state["video_url"],
-            },
-            "summary" : cached["summary"],
-            "keywords" : cached["keywords"],
-            "podcast_script": cached["podcast_script"],
-            "recommendation": cached.get("recommendation"),
-            "video_category": cached.get("category"),
-            "cache_hit": True,
-        }
-
-    print(f"🔍 Не найдено в кэше: {video_id}")
-    return {"cache_hit": False}
-
-
-def save_to_db_node(state: GraphState):
-    meta = state["video_metadata"]
-    save_to_cache(
-        video_id=meta["video_id"],
-        title=meta.get("title", "Unknown"),
-        url=meta["video_url"],
-        language=meta["language"],
-        duration_sec=meta["total_duration_sec"],
-        summary=state["summary"],
-        keywords=state["keywords"],
-        script=state["podcast_script"],
-        category=state.get("video_category", "unknown"),
-    )
-
-    rec = state.get("recommendation")
-    if rec:
-        save_recommendation_to_cache(meta["video_id"], rec)
-
-    return {"agent_execution_order": ["save_to_db"]}
-
-
-def route_cache(state: GraphState):
-    if state.get("cache_hit"):
-        if state.get("skip_audio"):
-            return "end"
-        return "audio"
-    return "extract_transcript"
-
-
-def route_post_save(state: GraphState):
-    if state.get("skip_audio"):
-        print("⏭️  Пропускаем генерацию аудио (skip_audio=True). Граф завершён.")
-        return "end"
-    return "audio"
-
-
-def rag_index_node(state: GraphState):
-    print("🧠 Агент RAG: Индексирую транскрипт...")
-    
-    segments = state.get("segments", [])
-    video_id = state["video_metadata"]["video_id"]
-    
-    if not segments:
-        return {"vector_index_status": "skipped (no segments)"}
-        
-    chunker = ChukingTranscript()
-    chunks = chunker.split(segments, video_id)
-    
-    index_video(video_id, chunks)
-    
-    return {"vector_index_status": f"indexed_{len(chunks)}_chunks"}
-
-
-def qa_agent(video_id: str, question: str):
-    return ask(video_id, question)
-
-
-def recommend_node(state: GraphState):
-    print("🔎 Агент Рекомендатор: ищу курсы и книги...")
-    video_id = state["video_metadata"]["video_id"]
-
-    cached_rec = get_cached_recommendation(video_id)
-    if cached_rec:
-        print(f"💾 Рекомендации найдены в кэше: {video_id}")
-        return {"recommendation": cached_rec, "agent_execution_order": ["recommend"]}
-
-    title = state.get("video_metadata", {}).get("title", "")
-    keywords = state.get("keywords", [])
-    language = state.get("video_metadata", {}).get("language", "ru")
-
-    search = TavilySearch(
-        max_results=5,
-        topic="general"
-    )
-
-    query_context = f"{title} {' '.join(keywords[:3])}".strip()
-    if not query_context:
-        query_context = "AI"  # Fallback
-
-    try:
-        if language == "ru":
-            courses_query = f"онлайн курсы {query_context}"
-            books_query = f"книги {query_context}"
-        else:
-            courses_query = f"online courses about {query_context}"
-            books_query = f"books about {query_context}"
-
-        courses_raw = search.invoke({"query": courses_query})
-        books_raw = search.invoke({"query": books_query})
-
-       
-        def parse_tavily_results(raw):
-            if isinstance(raw, list):
-                return [{"title": r.get("title", r.get("url", "")), "url": r.get("url", "")} for r in raw if isinstance(r, dict) and r.get("url")]
-            if isinstance(raw, dict) and "results" in raw:
-                return [{"title": r.get("title", r.get("url", "")), "url": r.get("url", "")} for r in raw["results"] if isinstance(r, dict) and r.get("url")]
-            return []
-
-        result_courses = parse_tavily_results(courses_raw)
-        result_books = parse_tavily_results(books_raw)
-    except Exception as e:
-        print(f"🚨 Ошибка recommend_node: {e}")
-        import traceback
-        traceback.print_exc()
-        result_courses = []
-        result_books = []
-
-    recommendation = {"courses": result_courses, "books": result_books}
-
-    if result_courses or result_books:
-        save_recommendation_to_cache(video_id, recommendation)
-        print(f"✅ Рекомендации сохранены: {video_id}")
-    else:
-        print(f"⚠️ Пустые рекомендации — не кэшируем: {video_id}")
-
-    return {
-        "recommendation": recommendation,
-        "agent_execution_order": ["recommend"],
-    }
+def save_script_node(state: GraphState):
+    repo.save_script(state["video_id"], state["podcast_script"])
+    _emit(script_saved=True)
+    return {"agent_execution_order": ["save_script"]}
