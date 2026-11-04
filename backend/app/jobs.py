@@ -5,6 +5,7 @@ and every open page of that video receives the same progress (stages, summary to
 import asyncio
 import logging
 import threading
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Callable
@@ -185,15 +186,20 @@ def start_processing(video_id: str, url: str, force: bool = False, kind: str | N
         repo.begin_processing(video_id, url, force, kind)
 
     def work(job: Job) -> None:
+        started, marks = time.monotonic(), []
         try:
             for mode, payload in graph.stream(initial_state(video_id, force), stream_mode=["custom", "updates"]):
                 if mode == "custom":
                     hub.emit(job, payload)
+                else:  # a step finished: when, counting from the start (steps already saved do nothing)
+                    marks += [f"{step} {time.monotonic() - started:.1f}" for step, update in payload.items() if update]
             if not job.rejected:
                 repo.finish(video_id)
         except Exception as e:
             repo.fail(video_id, humanize(e))
             raise
+        log.info("%s: готово за %.1f с; шаги закончились на секунде: %s",
+                 video_id, time.monotonic() - started, ", ".join(marks) or "—")
 
     return hub.submit(video_id, "process", work)
 
@@ -203,9 +209,11 @@ def start_audio(video_id: str, script: str) -> tuple[Job, bool]:
     from tools.audio_generator import generate_podcast_audio
 
     def work(job: Job) -> None:
+        started = time.monotonic()
         audio = generate_podcast_audio(script, on_progress=lambda d, t: hub.emit(job, {"progress": (d, t)}))
         repo.save_audio(video_id, audio)
         hub.emit(job, {"audio_saved": True})
+        log.info("%s: аудио готово за %.1f с", video_id, time.monotonic() - started)
 
     return hub.submit(video_id, "audio", work)
 

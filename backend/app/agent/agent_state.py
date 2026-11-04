@@ -1,7 +1,9 @@
 """LLM clients and the LangGraph state.
 
-The clients are created on first use, so the API starts (and the library opens) even without the keys;
-a missing key becomes a readable error on the step that needs it. Tests replace these functions."""
+Gemini does all the text work; Groq is there for speech recognition (tools/whisper.py) and, with
+CHECKS_PROVIDER=groq, for the short checks. The clients are created on first use, so the API starts (and
+the library opens) even without the keys; a missing key becomes a readable error on the step that needs it.
+Tests replace these functions."""
 import operator
 from functools import lru_cache
 from typing import Annotated, TypedDict
@@ -10,12 +12,34 @@ import config
 from errors import require_env
 
 
-@lru_cache(maxsize=1)
-def gemini():
+def _gemini(**options):
     from langchain_google_genai import ChatGoogleGenerativeAI
 
+    if config.GEMINI_THINKING_LEVEL:
+        options["thinking_level"] = config.GEMINI_THINKING_LEVEL
+    # Temperature stays at the default: Google advises against lowering it for Gemini 3 models.
+    # 6 attempts with growing pauses (about half a minute in all) ride out the free tier's per-minute limit.
     return ChatGoogleGenerativeAI(model=config.GEMINI_MODEL, api_key=require_env("GOOGLE_API_KEY"),
-                                  timeout=180, max_retries=2)
+                                  timeout=180, max_retries=6, **options)
+
+
+@lru_cache(maxsize=1)
+def gemini():
+    """Summaries, podcast scripts and answers to questions."""
+    return _gemini()
+
+
+@lru_cache(maxsize=1)
+def gemini_json():
+    """The short checks, answered as JSON: whether the material is educational, key terms, script review."""
+    return _gemini(response_mime_type="application/json")
+
+
+def checker(size: str = "large"):
+    """The model for the short checks. `size` picks between Groq's two models when CHECKS_PROVIDER=groq."""
+    if config.CHECKS_PROVIDER == "groq":
+        return groq_small() if size == "small" else groq_large()
+    return gemini_json()
 
 
 @lru_cache(maxsize=1)

@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from langgraph.config import get_stream_writer
 
+import config
 from agent import agent_state as llm
 from agent import prompts
 from agent.agent_state import GraphState, extract_text
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 HOSTS = ("Алекс", "Марина")
 CATEGORIES = {"educational", "entertainment", "news", "random", "music", "gaming", "advertising"}
 GROQ_CHAR_LIMIT = 8000  # keeps Groq requests within the free-tier tokens-per-minute budget
+GEMINI_CHAR_LIMIT = 60000  # Gemini reads a whole podcast script
 TEMPLATE_LABELS = {"содержание раздела", "ключевые понятия и определения", "важные идеи и факты",
                    "примеры и иллюстрации", "связи с другими темами"}
 
@@ -41,7 +43,9 @@ def _stage(video_id: str, stage: str) -> None:
     _emit(stage=stage)
 
 
-def _truncate(text: str, limit: int = GROQ_CHAR_LIMIT) -> str:
+def _truncate(text: str, limit: int | None = None) -> str:
+    if limit is None:
+        limit = GROQ_CHAR_LIMIT if config.CHECKS_PROVIDER == "groq" else GEMINI_CHAR_LIMIT
     return text if len(text) <= limit else text[:limit] + "\n... [текст обрезан]"
 
 
@@ -57,6 +61,8 @@ def _parse_json(raw: str, kind: type):
             value = json.loads(match.group(0))
         except json.JSONDecodeError:
             return None
+    if kind is list and isinstance(value, dict):  # {"keywords": [...]} in place of the bare list
+        value = next((v for v in value.values() if isinstance(v, list)), value)
     return value if isinstance(value, kind) else None
 
 
@@ -174,7 +180,7 @@ def classify_node(state: GraphState):
         )
     fallback = {"category": "unknown", "is_suitable": True, "confidence": 0.6, "reason": "классификатор не ответил"}
     try:
-        parsed = _parse_json(extract_text(llm.groq_small().invoke(prompt)), dict) or {}
+        parsed = _parse_json(extract_text(llm.checker("small").invoke(prompt)), dict) or {}
     except Exception as e:  # noqa: BLE001 — a failed check must not block the summary
         log.warning("классификатор недоступен: %s", e)
         parsed = {}
@@ -276,7 +282,7 @@ def keywords_node(state: GraphState):
         prompt = prompts.KEYWORDS.format(headings=headings or "(нет)",
                                          terms=_truncate("\n".join(f"{t} ({n})" for t, n in terms), 3000))
         try:
-            keywords = _clean_keywords(_parse_json(extract_text(llm.groq_large().invoke(prompt)), list))
+            keywords = _clean_keywords(_parse_json(extract_text(llm.checker().invoke(prompt)), list))
         except Exception as e:  # noqa: BLE001
             log.warning("ключевые слова: модель недоступна (%s), беру самые частые термины", e)
     if not keywords:
@@ -323,7 +329,7 @@ def critic_node(state: GraphState):
     prompt = prompts.CRITIC.format(script=_truncate(state.get("podcast_script", "")),
                                    keywords=", ".join(state.get("keywords") or []))
     try:
-        verdict = _parse_json(extract_text(llm.groq_large().invoke(prompt)), dict) or {}
+        verdict = _parse_json(extract_text(llm.checker().invoke(prompt)), dict) or {}
     except Exception as e:  # noqa: BLE001 — the editor is optional: keep the script
         log.warning("критик недоступен: %s", e)
         verdict = {}
