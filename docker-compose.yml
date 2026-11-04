@@ -10,6 +10,11 @@ services:
       - "5435:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lecture_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   api:
     build: ./backend
@@ -20,24 +25,37 @@ services:
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
       - GROQ_API_KEY=${GROQ_API_KEY}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
-    command: uvicorn app.api.api:app --host 0.0.0.0 --port 8000
+      - API_TOKEN=${API_TOKEN:-}
+      - YOUTUBE_PROXY_URL=${YOUTUBE_PROXY_URL:-}
+      - MAX_CONCURRENT_JOBS=${MAX_CONCURRENT_JOBS:-3}
+      - TTS_CONCURRENCY=${TTS_CONCURRENCY:-2}
     ports:
       - "8000:8000"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     volumes:
-      - ./backend:/app
       - vector_storage:/app/vector_storage
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   web:
     build: ./frontend
     restart: always
     environment:
       - API_URL=http://api:8000
+      - API_TOKEN=${API_TOKEN:-}
+      - APP_PASSWORD=${APP_PASSWORD:-}
+      - SESSION_SECRET=${SESSION_SECRET:-}
     ports:
       - "3000:3000"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   postgres_data:
