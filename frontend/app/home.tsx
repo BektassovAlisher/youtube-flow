@@ -1,276 +1,219 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type CSSProperties } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import { CATEGORY, fail, minutes, thumb, type GenerateResult, type VideoListItem } from "@/lib/api";
+import { api, ApiError, CATEGORY, cover, kindLabel, lengthLabel, notEducational, siteOf, uploadDocument, type VideoInfo, type VideoListItem } from "@/lib/api";
+import CoverImage from "./cover-image";
 import Eq from "./eq";
+import ErrorText from "./error-text";
 
-const TRANSCRIPT = [
-  ["00:04", "Представьте, что вы видите цифру три"],
-  ["00:11", "Мозг узнаёт её мгновенно"],
-  ["00:19", "Нейросеть — это просто функция"],
-  ["00:26", "У каждого нейрона есть вес"],
-  ["00:34", "Обучение — это поиск минимума"],
-];
-const WAVE = [40, 70, 55, 90, 65, 100, 45, 80, 60, 95, 50, 75, 35, 85, 60, 45, 70, 30, 55, 80, 40, 65, 50, 35];
-
-// each card previews what that step actually produces
-const STEPS = [
-  {
-    title: "Транскрипт",
-    text: "Берём субтитры видео на русском, английском или казахском.",
-    preview: (
-      <div className="pv-roll">
-        {[...TRANSCRIPT, ...TRANSCRIPT].map(([t, line], i) => (
-          <div key={i}>
-            <span className="t">{t}</span>
-            {line}
-          </div>
-        ))}
-      </div>
-    ),
-  },
-  {
-    title: "Проверка",
-    text: "Пропускаем только обучающие видео — клипы и влоги отсеиваются.",
-    preview: (
-      <>
-        <div className="pv-row"><span className="ok">✓</span> Лекция по ML <em>0.98</em></div>
-        <div className="pv-row dim"><span className="no">✕</span> Музыкальный клип <em>0.99</em></div>
-        <div className="pv-row"><span className="ok">✓</span> Курс по Python <em>0.95</em></div>
-      </>
-    ),
-  },
-  {
-    title: "Конспект",
-    text: "Разделы с таймкодами, ключевые термины и вопросы для самопроверки.",
-    preview: (
-      <>
-        <div className="pv-h"><span className="t">04:12</span>Градиентный спуск</div>
-        <div className="pv-line" style={{ width: "92%" }} />
-        <div className="pv-line" style={{ width: "78%" }} />
-        <div className="chips"><span className="chip">функция стоимости</span><span className="chip">шаг обучения</span></div>
-      </>
-    ),
-  },
-  {
-    title: "Сценарий подкаста",
-    text: "Диалог двух ведущих: Алекс спрашивает, Марина объясняет. Редактор проверяет каждую версию.",
-    preview: (
-      <>
-        <div className="pv-msg"><b>Алекс</b>А что вообще такое градиент?</div>
-        <div className="pv-msg b"><b>Марина</b>Представь, что спускаешься с горы в тумане и идёшь туда, где круче всего вниз.</div>
-      </>
-    ),
-  },
-  {
-    title: "Аудио и вопросы",
-    text: "Озвучка двумя голосами и ответы на вопросы со ссылками на моменты видео.",
-    preview: (
-      <>
-        <div className="pv-player">
-          <span className="pv-play">▶</span>
-          <span className="pv-wave">
-            {WAVE.map((h, i) => (
-              <i key={i} style={{ "--h": `${h}%`, "--i": i } as CSSProperties} />
-            ))}
-          </span>
-          <span className="muted">2:35</span>
-        </div>
-        <div className="pv-ask">Что такое веса? <span className="t">→ 12:05</span></div>
-      </>
-    ),
-  },
+// What the server does after the button, in the order the progress list on the material page shows it
+const STEPS: [string, string][] = [
+  ["Текст.", "Субтитры видео или распознанная речь, основной текст статьи без меню и рекламы, ваш текст или файл."],
+  ["Проверка.", "Модель смотрит, учебный ли это материал. Клипы и рекламу она отклонит, но их можно обработать вручную. Вставленный текст не проверяется."],
+  ["Конспект.", "Разделы с таймкодами или номерами абзацев, определения, выводы и вопросы для самопроверки. Текст появляется по мере написания."],
+  ["Термины.", "10–15 главных понятий из оглавления конспекта."],
+  ["Сценарий подкаста.", "Диалог двух ведущих. Редактор проверяет его и может вернуть на доработку."],
+  ["По кнопке.", "Озвучка на два голоса, ответы на вопросы со ссылками на нужные места, подборка курсов и книг."],
 ];
 
-// stages shown while a new video is processed; each is done when its graph node finishes (/generate/stream)
-const STAGES = [
-  ["extract_transcript", "Получаю субтитры"],
-  ["classify", "Проверяю, что это обучающее видео"],
-  ["merge", "Пишу конспект и выделяю термины"],
-  ["save_to_db", "Пишу сценарий подкаста — редактор проверяет"],
-] as const;
-
-const d = (n: number) => ({ "--d": n }) as CSSProperties;
-
-// typewriter for the headline: uneven gaps between keystrokes (ms) read as a person typing;
-// fixed values so the server-rendered HTML and the client agree
-const WORD = "Конспект любого урока с YouTube";
-const GAPS = Array.from(WORD, (_, i) => (i ? 40 + ((i * 29) % 50) : 0));
-const KEYSTROKES = GAPS.map((_, i) => 150 + GAPS.slice(0, i + 1).reduce((a, b) => a + b, 0));
-const DONE = KEYSTROKES[KEYSTROKES.length - 1] + 500;
+const MIN_TEXT = 300;
 
 export default function Home({ examples }: { examples: VideoListItem[] }) {
   const router = useRouter();
+  const [mode, setMode] = useState<"link" | "text">("link");
   const [url, setUrl] = useState("");
+  const [text, setText] = useState("");
+  const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [rejected, setRejected] = useState<GenerateResult | null>(null);
-  const [ripple, setRipple] = useState<{ x: number; y: number; key: number } | null>(null);
-  const [stage, setStage] = useState(0); // how many STAGES are done
+  const [error, setError] = useState<ApiError | null>(null);
+  const [rejected, setRejected] = useState<VideoInfo | null>(null);
 
-
-  useEffect(() => {
-    if (!busy) return;
-    const start = Date.now();
-    const id = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
-    return () => clearInterval(id);
-  }, [busy]);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  // the server answers at once (the work runs in the background); progress is shown on the material page
+  async function start(force = false, file?: File) {
     setBusy(true);
-    setElapsed(0);
-    setStage(0);
     setError(null);
     setRejected(null);
     try {
-      const res = await fetch("/api/generate/stream", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ video_url: url.trim(), skip_audio: true }),
-      });
-      if (!res.ok || !res.body) await fail(res);
-      let result: GenerateResult | null = null;
-      let buf = "";
-      const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
-      for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
-        const lines = (buf + chunk.value).split("\n");
-        buf = lines.pop()!;
-        for (const line of lines.filter(Boolean)) {
-          const ev = JSON.parse(line);
-          if (ev.error) throw new Error(ev.error);
-          if (ev.result) result = ev.result;
-          const i = STAGES.findIndex(([node]) => node === ev.step);
-          if (i >= 0) setStage((s) => Math.max(s, i + 1));
-        }
+      const body = mode === "text" ? { text, title: title.trim() || undefined } : { url: url.trim(), force };
+      const video = file
+        ? await uploadDocument(file, title.trim() || undefined)
+        : await api<VideoInfo>("videos", { method: "POST", body: JSON.stringify(body) });
+      if (video.status === "rejected") {
+        setRejected(video);
+        setBusy(false);
+      } else {
+        router.push(`/videos/${video.video_id}`);
       }
-      if (!result) throw new Error("Обработка прервалась, попробуйте ещё раз");
-      if (result.rejected) setRejected(result);
-      else router.push(`/videos/${result.video_id}`);
     } catch (err) {
-      setError((err as Error).message);
-    } finally {
+      setError(err as ApiError);
       setBusy(false);
     }
   }
 
-  const clock = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
+  const ready = mode === "link" ? url.trim().length > 0 : text.trim().length >= MIN_TEXT;
+  const submit = (
+    <button className="btn primary" disabled={busy || !ready}>
+      {busy ? (
+        <>
+          <Eq /> Отправляю…
+        </>
+      ) : (
+        "Сделать конспект"
+      )}
+    </button>
+  );
 
   return (
-    <>
-      <section className="hero">
-        <h1 className="hero-title" aria-label={WORD}>
-          {/* invisible full copy reserves the final height, so nothing below jumps when typing wraps a line */}
-          <span className="ghost" aria-hidden>
-            {WORD}
-            <span className="caret" />
-          </span>
-          <span aria-hidden>
-            {[...WORD].map((c, i) => (
-              <span key={i} className="ch" style={{ "--t": `${KEYSTROKES[i]}ms` } as CSSProperties}>
-                {c}
-              </span>
+    <div className="home">
+      <div>
+        <section className="intro">
+          <h1>Конспект лекции, статьи или PDF</h1>
+          <p className="lede">
+            Вставьте ссылку на видео, подкаст или статью либо сам текст. Получится конспект с таймкодами, вопросы для
+            самопроверки, подкаст на два голоса и ответы на вопросы по материалу.
+          </p>
+        </section>
+
+        <div className="composer">
+          <div className="mode" role="tablist" aria-label="Что добавить">
+            {(["link", "text"] as const).map((m) => (
+              <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setMode(m)} disabled={busy}>
+                {m === "link" ? "Ссылка" : "Текст или файл"}
+              </button>
             ))}
-            <span className="caret" style={{ "--done": `${DONE}ms` } as CSSProperties} />
-          </span>
-        </h1>
-        <p className="subtitle rise" style={d(1)}>
-          Вставьте ссылку на обучающее видео — получите конспект с таймкодами, подкаст на два голоса и ответы на вопросы по
-          видео. Русский, английский, казахский.
-        </p>
-
-        <form className="form rise" style={d(2)} onSubmit={submit}>
-          <input
-            className="field"
-            type="url"
-            required
-            placeholder="Ссылка на видео с YouTube"
-            aria-label="Ссылка на YouTube"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            disabled={busy}
-          />
-          <span className="cta" data-waiting={busy || !url.trim() || undefined}>
-            <button
-              className="btn primary"
-              disabled={busy || !url.trim()}
-              onPointerDown={(e) => {
-                const r = e.currentTarget.getBoundingClientRect();
-                setRipple({ x: e.clientX - r.left, y: e.clientY - r.top, key: e.timeStamp });
-              }}
-            >
-              {ripple && <span key={ripple.key} className="ripple" style={{ "--x": `${ripple.x}px`, "--y": `${ripple.y}px` } as CSSProperties} />}
-              {busy ? (
-                <>
-                  <Eq /> Обработка {clock}
-                </>
-              ) : (
-                "Создать →"
-              )}
-            </button>
-          </span>
-        </form>
-
-        {busy && (
-          <ol className="stages fade" aria-live="polite">
-            {STAGES.map(([node, label], i) => (
-              <li key={node} data-state={i < stage ? "done" : i === stage ? "active" : undefined}>
-                <span className="stage-mark">{i < stage ? "✓" : i === stage ? <Eq /> : ""}</span>
-                {label}
-              </li>
-            ))}
-            <li className="stages-hint">Обычно это занимает от 30 секунд до пары минут — зависит от длины видео.</li>
-          </ol>
-        )}
-        {error && <p className="error fade">{error}</p>}
-
-        {rejected && (
-          <div className="notice fade" role="status">
-            <h3>Видео не подходит для обработки</h3>
-            <p>Категория: {CATEGORY[rejected.video_category ?? "unknown"] ?? rejected.video_category}</p>
-            {rejected.classification_reason && <p>{rejected.classification_reason}</p>}
-            <p className="muted">Выберите обучающее видео: лекцию, туториал или курс.</p>
           </div>
-        )}
 
-        {examples.length > 0 && !busy && (
-          <div className="examples rise" style={d(3)}>
-            <p className="eyebrow">Или откройте готовый пример</p>
-            <ul className="examples-list">
+          <form
+            className="form-block"
+            onSubmit={(e) => {
+              e.preventDefault();
+              start();
+            }}
+          >
+            {mode === "link" ? (
+              <>
+                <label className="field-label" htmlFor="material-url">Ссылка на видео, подкаст или статью</label>
+                <div className="form">
+                  <input
+                    id="material-url"
+                    className="field"
+                    type="text"
+                    inputMode="url"
+                    autoComplete="off"
+                    spellCheck={false}
+                    required
+                    placeholder="https://"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    disabled={busy}
+                  />
+                  {submit}
+                </div>
+              </>
+            ) : (
+              <div className="text-fields">
+                <label className="field-label" htmlFor="material-title">Название, если нужно своё</label>
+                <input
+                  id="material-title"
+                  className="field"
+                  maxLength={300}
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  disabled={busy}
+                />
+                <label className="field-label" htmlFor="material-text">Текст статьи, главы, лекции или своих заметок</label>
+                <textarea
+                  id="material-text"
+                  className="field textarea"
+                  required
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  disabled={busy}
+                />
+                <div className="text-foot">
+                  <span className="muted num">
+                    {text.length < MIN_TEXT
+                      ? `Нужно хотя бы ${MIN_TEXT} символов, сейчас ${text.length}`
+                      : `${text.length.toLocaleString("ru-RU")} символов`}
+                  </span>
+                  <label className="btn small upload" aria-disabled={busy || undefined}>
+                    Загрузить файл: PDF, TXT или MD
+                    <input
+                      type="file"
+                      accept=".pdf,.txt,.md,.markdown,application/pdf,text/plain,text/markdown"
+                      disabled={busy}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = ""; // the same file can be picked again after an error
+                        if (file) start(false, file);
+                      }}
+                    />
+                  </label>
+                </div>
+                {submit}
+              </div>
+            )}
+          </form>
+
+          {error && <ErrorText error={error} />}
+
+          {rejected && (
+            <div className="notice" role="status">
+              <h3>{notEducational(rejected.kind)}</h3>
+              <p>Категория: {CATEGORY[rejected.classification?.category ?? "unknown"] ?? rejected.classification?.category}</p>
+              {rejected.classification?.reason && <p>{rejected.classification.reason}</p>}
+              <p className="muted">Конспект лучше всего получается из лекций, уроков, руководств и разборов.</p>
+              <div className="actions">
+                <button className="btn small" onClick={() => start(true)} disabled={busy}>
+                  Всё равно обработать
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {examples.length > 0 && (
+          <section className="recent" aria-labelledby="recent">
+            <div className="recent-head">
+              <h2 className="label" id="recent">Недавние</h2>
+              <Link href="/library">Вся библиотека</Link>
+            </div>
+            <ul className="rows compact">
               {examples.map((v) => (
                 <li key={v.video_id}>
-                  <Link href={`/videos/${v.video_id}`} className="example">
-                    <img className="thumb" src={thumb(v.video_id)} alt="" loading="lazy" />
+                  <Link href={`/videos/${v.video_id}`} className="row">
+                    <CoverImage src={cover(v)} label={kindLabel(v)} />
                     <span>
-                      <b>{v.title ?? v.video_id}</b>
-                      <small>{[v.language?.toUpperCase(), minutes(v.duration_sec)].filter(Boolean).join(" · ")}</small>
+                      <span className="row-title">{v.title ?? v.video_id}</span>
+                      <span className="row-meta">
+                        {[kindLabel(v), v.kind !== "youtube" && (v.channel || (v.url && siteOf(v.url))), v.language?.toUpperCase(), lengthLabel(v)]
+                          .filter((x, i, all) => x && all.indexOf(x) === i)
+                          .join(" · ")}
+                      </span>
                     </span>
                   </Link>
                 </li>
               ))}
             </ul>
-          </div>
+          </section>
         )}
-      </section>
+      </div>
 
-      <section className="section">
-        <h2 className="section-title reveal">Как это работает</h2>
-        <ol className="steps reveal">
-          {STEPS.map((s, i) => (
-            <li key={s.title} className="step">
-              <div className="pv" aria-hidden>{s.preview}</div>
-              <div className="step-body">
-                <span className="step-n">{String(i + 1).padStart(2, "0")}</span>
-                <b>{s.title}</b>
-                <p>{s.text}</p>
-              </div>
+      <aside className="margin" aria-labelledby="steps">
+        <h2 className="label" id="steps">Что будет после нажатия</h2>
+        <ol className="steps">
+          {STEPS.map(([name, text]) => (
+            <li key={name}>
+              <span>
+                <b>{name}</b> {text}
+              </span>
             </li>
           ))}
         </ol>
-      </section>
-    </>
+        <p>Страницу можно закрыть: обработка идёт на сервере, а готовый материал появится в библиотеке.</p>
+      </aside>
+    </div>
   );
 }
