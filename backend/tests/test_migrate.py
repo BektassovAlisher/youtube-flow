@@ -33,10 +33,11 @@ def test_old_database_is_upgraded_in_place(tmp_path):
 
     insp = inspect(engine)
     columns = {c["name"] for c in insp.get_columns("videos")}
-    assert {"status", "stage", "error", "channel", "classification", "force", "transcript", "indexed"} <= columns
+    assert {"status", "stage", "error", "channel", "classification", "force", "transcript", "indexed",
+            "kind", "image_url", "word_count", "anchors"} <= columns
     assert "qa_answers" in insp.get_table_names()
     for table in ("summaries", "keywords", "podcast_scripts"):
         assert any(ix["column_names"] == ["video_id"] for ix in insp.get_indexes(table)), table
     with engine.connect() as conn:
-        row = conn.execute(text("SELECT status, title, indexed FROM videos")).one()
-    assert tuple(row) == ("ready", "Старое видео", 0)  # existing videos count as fully processed
+        row = conn.execute(text("SELECT status, title, indexed, kind FROM videos")).one()
+    assert tuple(row) == ("ready", "Старое видео", 0, "youtube")  # existing rows: fully processed YouTube videos

@@ -61,18 +61,22 @@ def get_video(video_id: str) -> dict | None:
             "force": bool(v.force),
             "indexed": bool(v.indexed),
             "transcript_source": v.transcript_source,
+            "anchors": v.anchors,
         }
 
 
 def _item(v: Video) -> dict:
     return {
         "video_id": v.video_id,
+        "kind": v.kind or "youtube",
         "title": v.title,
         "url": v.url,
         "language": v.language,
         "duration_sec": v.duration_sec,
         "category": v.category,
         "channel": v.channel,
+        "image_url": v.image_url,
+        "word_count": v.word_count,
         "status": v.status,
         "created_at": v.created_at,
     }
@@ -92,12 +96,14 @@ def list_videos(limit: int = 24, offset: int = 0, q: str | None = None) -> tuple
 
 # ---- processing state -------------------------------------------------------------------------
 
-def begin_processing(video_id: str, url: str, force: bool = False) -> None:
-    """Creates the row for a new video, or prepares an existing one for another run."""
+def begin_processing(video_id: str, url: str, force: bool = False, kind: str | None = None,
+                     title: str | None = None) -> None:
+    """Creates the row for a new material, or prepares an existing one for another run (its kind is kept)."""
     with _session() as s:
         v = s.get(Video, video_id)
         if v is None:
-            s.add(Video(video_id=video_id, url=url, status="processing", stage="queued", force=force))
+            s.add(Video(video_id=video_id, url=url, kind=kind or "youtube", title=title, status="processing",
+                        stage="queued", force=force))
             return
         v.force = v.force or force
         v.error = None
@@ -141,12 +147,13 @@ def interrupted() -> list[dict]:
 
 # ---- pipeline artifacts -----------------------------------------------------------------------
 
-def save_transcript(video_id: str, segments: list[dict], *, language: str, source: str, duration_sec: float,
-                    title: str | None, channel: str | None) -> None:
+def save_transcript(video_id: str, segments: list[dict], *, language: str, source: str, duration_sec: float | None,
+                    title: str | None, channel: str | None, **extra) -> None:
+    """The material's text with its metadata; `extra` takes image_url, word_count and anchors for text materials."""
     with _session() as s:
         s.execute(update(Video).where(Video.video_id == video_id).values(
             transcript=segments, transcript_source=source, language=language, duration_sec=duration_sec,
-            title=title, channel=channel,
+            title=title, channel=channel, **{k: v for k, v in extra.items() if k in ("image_url", "word_count", "anchors")},
         ))
 
 

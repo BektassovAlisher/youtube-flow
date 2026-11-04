@@ -47,9 +47,15 @@ class Video(Base):
     channel = Column(Text)
     classification = Column(JSON)  # {category, is_suitable, confidence, reason}
     force = Column(Boolean, nullable=False, default=False, server_default=text("false"))  # process despite the classifier
-    transcript = deferred(Column(JSON))  # [{start, duration, text}] — kept so steps can be redone without YouTube
-    transcript_source = Column(Text)  # manual | generated | whisper
+    # youtube | article | text; everything stored before articles existed is a YouTube video
+    kind = Column(Text, nullable=False, default="youtube", server_default="youtube")
+    # videos: [{start, duration, text}]; articles and pasted text: [{n, section, text}] — kept so steps can be redone
+    transcript = deferred(Column(JSON))
+    transcript_source = Column(Text)  # manual | generated | whisper | article | pasted
     indexed = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    image_url = Column(Text)  # article cover (og:image)
+    word_count = Column(Integer)  # articles and pasted text: for the reading time
+    anchors = Column(JSON)  # articles: {"N": first words of paragraph N} for links into the original page
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
 

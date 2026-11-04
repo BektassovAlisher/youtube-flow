@@ -18,8 +18,7 @@ from api.security import client_id, limiter, require_token
 from db import cache as repo
 from db.database import init_db
 from errors import UserError, humanize
-from tools import recommendations
-from tools.youtube_scraper import parse_video_id, watch_url
+from tools import recommendations, sources, text_sources
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("videoflow")
@@ -36,8 +35,8 @@ async def lifespan(_app: FastAPI):
     jobs.hub.shutdown()
 
 
-app = FastAPI(title="VideoFlow API", description="Конспекты, подкасты и ответы по обучающим YouTube-видео",
-              version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="VideoFlow API", description="Конспекты, подкасты и ответы по обучающим видео, статьям и текстам",
+              version="2.1.0", lifespan=lifespan)
 
 protected = [Depends(require_token)]
 
@@ -50,8 +49,12 @@ async def _user_error(_request: Request, exc: UserError):
 # ---- models -----------------------------------------------------------------------------------
 
 class CreateVideo(BaseModel):
-    video_url: str
-    force: bool = False  # process even if the classifier decided the video is not educational
+    """A link (YouTube video or article) or a pasted text with an optional title."""
+    url: str | None = None
+    video_url: str | None = None  # the old name of `url`
+    text: str | None = None
+    title: str | None = Field(None, max_length=300)
+    force: bool = False  # process even if the classifier decided the material is not educational
 
 
 class Regenerate(BaseModel):
@@ -69,7 +72,7 @@ class Question(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    video_url: str
+    video_url: str  # a YouTube video or an article
     skip_audio: bool = True
 
 
@@ -94,14 +97,32 @@ def _complete(video: dict) -> bool:
     return video["status"] == "ready" and bool(video["summary"] and video["keywords"] and video["podcast_script"])
 
 
-def _start(video_url: str, force: bool, request: Request) -> str:
-    video_id = parse_video_id(video_url)
+def _start(link: str, force: bool, request: Request) -> str:
+    kind, video_id, url = sources.detect_url(link)
     video = repo.get_video(video_id)
     if video and not force and (video["status"] == "rejected" or _complete(video)):
         return video_id  # nothing to do: the stored result (or the stored rejection) is the answer
     if jobs.hub.get(video_id, "process") is None:  # a new run spends LLM credits
         limiter.hit("videos", client_id(request), config.LIMIT_VIDEOS_PER_HOUR)
-    jobs.start_processing(video_id, watch_url(video_id), force)
+    jobs.start_processing(video_id, url, force, kind)
+    return video_id
+
+
+def _start_text(text: str, title: str | None, request: Request) -> str:
+    """Pasted text is parsed and saved right away; the run then starts from the classifier step."""
+    segments = text_sources.parse_pasted(text)
+    video_id = text_sources.text_id(text)
+    video = repo.get_video(video_id)
+    if video and _complete(video):
+        return video_id
+    if jobs.hub.get(video_id, "process") is None:
+        limiter.hit("videos", client_id(request), config.LIMIT_VIDEOS_PER_HOUR)
+        name = (title or "").strip() or text_sources.title_from_text(text)
+        repo.begin_processing(video_id, "", kind="text", title=name)
+        repo.save_transcript(video_id, segments, language=text_sources.guess_language(text), source="pasted",
+                             duration_sec=None, title=name, channel=None,
+                             word_count=text_sources.word_count(segments))
+    jobs.start_processing(video_id, "", kind="text")
     return video_id
 
 
@@ -123,12 +144,23 @@ def list_videos(response: Response, limit: int = Query(24, ge=1, le=100), offset
 @app.post("/videos", dependencies=protected)
 def create_video(req: CreateVideo, request: Request):
     """Starts processing (or returns the stored result) right away; progress comes from /videos/{id}/events."""
-    return _payload(_start(req.video_url, req.force, request))
+    if req.text is not None:
+        return _payload(_start_text(req.text, req.title, request))
+    return _payload(_start(req.url or req.video_url or "", req.force, request))
 
 
 @app.get("/videos/{video_id}")
 def get_video(video_id: str):
     return _payload(video_id)
+
+
+@app.get("/videos/{video_id}/source")
+def get_source(video_id: str):
+    """The paragraphs of a pasted text, for reading it next to the summary. Articles link to the original instead."""
+    video = repo.get_video(video_id)
+    if video is None or video["kind"] != "text":
+        raise HTTPException(status_code=404, detail="Исходный текст есть только у вставленных текстов")
+    return {"video_id": video_id, "segments": repo.load_transcript(video_id) or []}
 
 
 @app.get("/videos/{video_id}/events")
@@ -152,6 +184,18 @@ def regenerate(video_id: str, req: Regenerate, request: Request):
     limiter.hit("videos", client_id(request), config.LIMIT_VIDEOS_PER_HOUR)
     repo.clear_for_regenerate(video_id, req.part)
     jobs.start_processing(video_id, video["url"])
+    return _payload(video_id)
+
+
+@app.post("/videos/{video_id}/resume", dependencies=protected)
+def resume(video_id: str, request: Request):
+    """Continue an interrupted or failed run from its last saved step (works for every kind of material)."""
+    video = repo.get_video(video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Видео не найдено")
+    if jobs.hub.get(video_id, "process") is None and not _complete(video):
+        limiter.hit("videos", client_id(request), config.LIMIT_VIDEOS_PER_HOUR)
+        jobs.start_processing(video_id, video["url"])
     return _payload(video_id)
 
 

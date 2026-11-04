@@ -45,9 +45,15 @@ def test_new_video_returns_at_once_and_streams_progress(client, youtube, llm):
     assert video["status"] == "ready" and video["summary"] and video["podcast_script"] and video["jobs"] == []
 
 
-def test_bad_link_is_a_400_in_russian(client):
-    r = client.post("/videos", json={"video_url": "https://example.com/articles/how-to-learn-python"})
-    assert r.status_code == 400 and "не ссылка на YouTube" in r.json()["detail"]
+@pytest.mark.parametrize("link, hint", [
+    ("просто слова", "Вставьте ссылку на видео YouTube или на статью"),
+    ("https://vimeo.com/123456", "Видео с vimeo.com пока не поддерживаются"),
+    ("https://www.youtube.com/playlist?list=PL1", "плейлист"),
+    ("ftp://example.com/file", "http:// или https://"),
+])
+def test_bad_link_is_a_400_in_russian(client, link, hint):
+    r = client.post("/videos", json={"url": link})
+    assert r.status_code == 400 and hint in r.json()["detail"]
 
 
 def test_unknown_video_404(client):
