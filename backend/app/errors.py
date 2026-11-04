@@ -15,7 +15,7 @@ class UserError(Exception):
 def require_env(name: str) -> str:
     value = os.getenv(name)
     if not value:
-        raise UserError(f"На сервере не задан {name} — добавьте его в .env и перезапустите API.", status=503)
+        raise UserError(f"На сервере не задан {name}. Добавьте его в .env и перезапустите API.", status=503)
     return value
 
 
@@ -55,4 +55,4 @@ def humanize(exc: BaseException) -> str:
         return "Внешний сервис не ответил вовремя. Попробуйте ещё раз."
     if names & _CONNECTION:
         return "Нет связи с внешним сервисом. Проверьте подключение к интернету и попробуйте ещё раз."
-    return "Что-то пошло не так. Попробуйте ещё раз — если ошибка повторится, загляните в логи API."
+    return "Что-то пошло не так. Попробуйте ещё раз, а если ошибка повторится, загляните в логи API."

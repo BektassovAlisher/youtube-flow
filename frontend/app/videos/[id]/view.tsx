@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { api, CATEGORY, isAudio, isMediaFile, kindLabel, lengthLabel, notEducational, siteOf, stagesFor, type Job, type Kind, type VideoInfo } from "@/lib/api";
 import CoverImage from "../../cover-image";
 import Eq from "../../eq";
@@ -23,7 +23,6 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number][0];
 
-const d = (n: number) => ({ "--d": n }) as CSSProperties;
 const isTab = (t: string | undefined): t is Tab => TABS.some(([k]) => k === t);
 
 export default function VideoView({ id, initial, apiDown, initialTab }: { id: string; initial: VideoInfo | null; apiDown: boolean; initialTab?: string }) {
@@ -86,8 +85,8 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
   }
 
   const back = (
-    <Link href="/library" className="back eyebrow">
-      <span>←</span> Библиотека
+    <Link href="/library" className="back">
+      ← Библиотека
     </Link>
   );
 
@@ -95,7 +94,7 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
     return (
       <>
         {back}
-        <div className="notice fade">
+        <div className="notice">
           {apiDown ? (
             <>
               <h3>Сервер API недоступен</h3>
@@ -106,7 +105,7 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
               <h3>Материал не найден</h3>
               <p>Его ещё не обрабатывали или удалили.</p>
               {/^[\w-]{11}$/.test(id) && (
-                <div className="actions notice-actions">
+                <div className="actions">
                   <button className="btn small" onClick={() => process()} disabled={busy}>Обработать это видео</button>
                 </div>
               )}
@@ -126,15 +125,25 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
     .filter((x, i, all) => x && x !== CATEGORY.unknown && all.indexOf(x) === i)
     .join(" · ");
 
+  // the right column only when there is something to play or a real cover; a pasted text gets the full width
+  const media =
+    kind === "youtube" ? (
+      <Player id={id} at={at} onPlay={locate.seek} onClose={() => setAt(null)} />
+    ) : kind === "media" && isMediaFile(video.url) ? (
+      <MediaPlayer url={video.url} audio={isAudio(video.url)} at={at} title={video.title ?? ""} />
+    ) : video.image_url ? (
+      <Cover video={video} />
+    ) : null;
+
   return (
     <LocateContext.Provider value={locate}>
       {back}
 
-      <div className="vhead">
+      <div className={media ? "vhead" : "vhead solo"}>
         <div>
-          {meta && <p className="eyebrow rise">{meta}</p>}
-          <h1 className="rise" style={d(1)}>{video.title ?? id}</h1>
-          <div className="actions rise" style={d(2)}>
+          {meta && <p className="meta">{meta}</p>}
+          <h1>{video.title ?? id}</h1>
+          <div className="actions">
             {kind === "youtube" && (
               <a className="btn small" href={`https://www.youtube.com/watch?v=${id}`} target="_blank" rel="noreferrer">
                 Открыть на YouTube ↗
@@ -149,23 +158,15 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
           </div>
           {error && <ErrorText error={error} />}
         </div>
-        <div className="media rise" style={d(1)}>
-          {kind === "youtube" ? (
-            <Player id={id} at={at} onPlay={locate.seek} onClose={() => setAt(null)} />
-          ) : kind === "media" && isMediaFile(video.url) ? (
-            <MediaPlayer url={video.url} audio={isAudio(video.url)} at={at} title={video.title ?? ""} />
-          ) : (
-            <Cover video={video} />
-          )}
-        </div>
+        {media && <div className="media">{media}</div>}
       </div>
 
       {video.status === "rejected" ? (
-        <div className="notice fade" role="status">
+        <div className="notice" role="status">
           <h3>{notEducational(kind)}</h3>
           <p>Категория: {CATEGORY[video.classification?.category ?? "unknown"] ?? video.classification?.category}</p>
           {video.classification?.reason && <p>{video.classification.reason}</p>}
-          <div className="actions notice-actions">
+          <div className="actions">
             <button className="btn small" onClick={() => process(true)} disabled={busy}>Всё равно обработать</button>
           </div>
         </div>
@@ -183,11 +184,11 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
       ) : (
         <>
           {processJob && processJob.stage !== "summary" && (
-            <p className="banner inline fade">
-              <Eq /> Конспект готов. Сценарий подкаста ещё пишется — он появится во вкладке «Сценарий».
+            <p className="banner" role="status">
+              <Eq /> Конспект готов. Сценарий подкаста ещё пишется и появится во вкладке «Сценарий».
             </p>
           )}
-          <div className="tabs rise" style={d(3)} role="tablist">
+          <div className="tabs" role="tablist" aria-label="Разделы материала">
             {tabs.map(([k, label]) => (
               <button key={k} role="tab" className="tab" aria-selected={tab === k} onClick={() => open(k)}>
                 {label}
@@ -196,7 +197,7 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
           </div>
           {tabs.map(([k]) =>
             visited.has(k) ? (
-              <section key={k} className="panel fade" role="tabpanel" hidden={tab !== k}>
+              <section key={k} className="panel" role="tabpanel" hidden={tab !== k}>
                 {k === "summary" && <Summary video={video} busy={busy || !!processJob} onRegenerate={() => regenerate("summary")} />}
                 {k === "text" && <SourceText id={id} focus={focus} />}
                 {k === "quiz" && <Quiz material={video} questions={quiz} />}
@@ -215,20 +216,13 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
   );
 }
 
-// articles: their cover (or the site's name), linking to the original; pasted text: a plain card
+// an article's or a recording's cover, linking to the original (the site's name if the picture fails to load)
 function Cover({ video }: { video: VideoInfo }) {
-  const label = video.kind === "text" ? "Текст" : video.kind === "media" ? siteOf(video.url) : video.channel || siteOf(video.url);
-  if (video.image_url)
-    return (
-      <a className="cover" href={video.url} target="_blank" rel="noreferrer" aria-label="Открыть оригинал">
-        <CoverImage src={video.image_url} label={label} lazy={false} />
-      </a>
-    );
+  const label = video.kind === "media" ? siteOf(video.url) : video.channel || siteOf(video.url);
   return (
-    <div className="cover-placeholder" aria-hidden>
-      <span className="cover-letter">{label.slice(0, 1).toUpperCase()}</span>
-      <span>{label}</span>
-    </div>
+    <a className="cover" href={video.url} target="_blank" rel="noreferrer" aria-label="Открыть оригинал">
+      <CoverImage src={video.image_url} label={label} lazy={false} />
+    </a>
   );
 }
 
@@ -241,16 +235,16 @@ function Progress({ kind, job, partial, video, error, stuck, busy, onResume }: {
   return (
     <section className="progress">
       {error ? (
-        <div className="notice fade" role="alert">
+        <div className="notice" role="alert">
           <h3>Не получилось обработать {{ youtube: "видео", media: "запись", article: "статью", text: "текст" }[kind]}</h3>
           <p>{error}</p>
-          <div className="actions notice-actions">
+          <div className="actions">
             <button className="btn small" onClick={onResume} disabled={busy}>Попробовать ещё раз</button>
           </div>
         </div>
       ) : (
         <>
-          <ol className="stages fade" aria-live="polite">
+          <ol className="stages" aria-live="polite">
             {stages.map(([key, label], i) => (
               <li key={key} data-state={i < active ? "done" : i === active ? "active" : undefined}>
                 <span className="stage-mark">{i < active ? "✓" : i === active ? <Eq /> : ""}</span>
@@ -261,12 +255,12 @@ function Progress({ kind, job, partial, video, error, stuck, busy, onResume }: {
           <p className="stages-hint muted">
             {job?.status === "queued"
               ? "В очереди: сервер сейчас обрабатывает другие материалы."
-              : "Страницу можно закрыть — обработка продолжится на сервере, а конспект появится здесь."}
+              : "Страницу можно закрыть: обработка продолжится на сервере, а конспект появится здесь."}
           </p>
           {stuck && (
-            <div className="notice fade">
-              <p>Обработка не идёт — возможно, сервер перезапускался.</p>
-              <div className="actions notice-actions">
+            <div className="notice">
+              <p>Обработка не идёт. Возможно, сервер перезапускался.</p>
+              <div className="actions">
                 <button className="btn small" onClick={onResume} disabled={busy}>Продолжить</button>
               </div>
             </div>
@@ -274,8 +268,8 @@ function Progress({ kind, job, partial, video, error, stuck, busy, onResume }: {
         </>
       )}
       {partial && !error && (
-        <div className="live-summary fade">
-          <p className="eyebrow">Конспект пишется прямо сейчас</p>
+        <div className="live-summary">
+          <p className="meta">Конспект пишется прямо сейчас</p>
           <Markdown text={partial} material={video} />
           <span className="live-caret" aria-hidden />
         </div>

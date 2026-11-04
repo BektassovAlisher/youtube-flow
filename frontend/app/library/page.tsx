@@ -1,8 +1,8 @@
 import Link from "next/link";
-import type { CSSProperties } from "react";
-import { addedOn, CATEGORY, cover, kindLabel, lengthLabel, siteOf, type VideoListItem } from "@/lib/api";
+import { addedOn, CATEGORY, cover, kindLabel, lengthLabel, plural, siteOf, type VideoListItem } from "@/lib/api";
 import { serverApi } from "@/lib/server-api";
 import CoverImage from "../cover-image";
+import Eq from "../eq";
 
 const PAGE = 24;
 
@@ -15,69 +15,70 @@ export default async function LibraryPage({ searchParams }: PageProps<"/library"
   const total = Number(headers?.get("x-total-count") ?? videos?.length ?? 0);
   const pages = Math.max(1, Math.ceil(total / PAGE));
   const link = (p: number) => `/library?${new URLSearchParams({ ...(q && { q }), ...(p > 1 && { page: String(p) }) })}`;
+  const count = `${total} ${plural(total, "материал", "материала", "материалов")}`;
 
   return (
     <>
-      <div className="bar rise">
+      <div className="lib-head">
         <div>
-          {videos && <p className="eyebrow">{q ? `Найдено: ${total}` : `Материалов: ${total}`}</p>}
-          <h1 className="section-title">Библиотека</h1>
+          <h1>Библиотека</h1>
+          {videos && <p className="meta">{q ? `По запросу «${q}»: ${count}` : count}</p>}
         </div>
-        <form className="search" action="/library">
-          <input className="field" type="search" name="q" defaultValue={q} placeholder="Название, канал или сайт" aria-label="Поиск" />
+        <form className="search" action="/library" role="search">
+          <label className="field-label" htmlFor="library-q">Поиск по названию, каналу или сайту</label>
+          <input className="field" id="library-q" type="search" name="q" defaultValue={q} />
         </form>
       </div>
 
-      {!videos && <p className="error">Сервер API недоступен — библиотека появится, когда он запустится.</p>}
+      {!videos && <p className="error">Сервер API недоступен. Библиотека появится, когда он запустится.</p>}
 
       {videos?.length === 0 && (
-        <p className="empty fade">
+        <p className="empty">
           {q ? (
             <>
               Ничего не нашлось. <Link href="/library">Показать всё</Link>
             </>
           ) : (
             <>
-              Пока пусто. <Link href="/">Создайте первый конспект →</Link>
+              Здесь будут все обработанные материалы. <Link href="/">Сделайте первый конспект</Link>
             </>
           )}
         </p>
       )}
 
-      <ul className="grid">
-        {videos?.map((v, i) => {
-          const tags = [v.kind !== "youtube" && kindLabel(v), v.language?.toUpperCase(), lengthLabel(v), CATEGORY[v.category ?? ""]]
-            .filter((t): t is string => !!t && t !== CATEGORY.unknown);
-          return (
-            <li key={v.video_id} className="rise" style={{ "--d": Math.min(i, 12) } as CSSProperties}>
-              <Link href={`/videos/${v.video_id}`} className="card">
-                <div className="media">
+      {!!videos?.length && (
+        <ul className="rows">
+          {videos.map((v) => {
+            const meta = [kindLabel(v), v.channel || (v.kind !== "youtube" && v.kind !== "text" && siteOf(v.url)), v.language?.toUpperCase(), lengthLabel(v), CATEGORY[v.category ?? ""]]
+              .filter((t, i, all): t is string => !!t && t !== CATEGORY.unknown && all.indexOf(t) === i);
+            return (
+              <li key={v.video_id}>
+                <Link href={`/videos/${v.video_id}`} className="row">
                   <CoverImage src={cover(v)} label={v.kind === "article" ? v.channel || siteOf(v.url) : v.kind === "media" ? siteOf(v.url) : kindLabel(v)} />
-                  {v.status === "processing" && <span className="badge">Обрабатывается</span>}
-                </div>
-                <div className="card-body">
-                  <div className="card-title">{v.title ?? v.video_id}</div>
-                  {v.channel && <div className="date">{v.channel}</div>}
-                  <div className="tags">
-                    {tags.map((t) => (
-                      <span key={t} className="tag">{t}</span>
-                    ))}
-                  </div>
-                  <div className="card-foot">
-                    <span className="date">{addedOn(v.created_at)}</span>
-                    <span className="arrow">→</span>
-                  </div>
-                </div>
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
+                  <span>
+                    <span className="row-title">{v.title ?? v.video_id}</span>
+                    <span className="row-meta">{meta.join(" · ")}</span>
+                  </span>
+                  <span className="row-side">
+                    {v.status === "processing" ? (
+                      <span className="state">
+                        <Eq /> Обрабатывается
+                      </span>
+                    ) : (
+                      addedOn(v.created_at)
+                    )}
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
 
       {pages > 1 && (
         <nav className="pager" aria-label="Страницы">
           {page > 1 ? <Link className="btn small" href={link(page - 1)}>← Назад</Link> : <span />}
-          <span className="muted">
+          <span className="muted num">
             {page} из {pages}
           </span>
           {page < pages ? <Link className="btn small" href={link(page + 1)}>Дальше →</Link> : <span />}

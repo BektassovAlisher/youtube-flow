@@ -1,13 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError, askStream, type Answer, type Job, type Material, type Recs, type VideoInfo } from "@/lib/api";
 import Eq from "../../eq";
 import ErrorText from "../../error-text";
 import type { Failure } from "./live";
 import Markdown, { TimestampLink } from "./markdown";
-
-const idx = (i: number) => ({ "--i": Math.min(i, 20) }) as CSSProperties;
 
 // The summary ends with "## Вопросы для самопроверки" + a numbered list: cut it out and render it as quiz cards.
 export function splitQuiz(md: string) {
@@ -36,7 +34,9 @@ function download(name: string, text: string) {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
   a.download = name;
+  document.body.append(a); // a detached link loses the file name in some browsers
   a.click();
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
@@ -45,21 +45,21 @@ export function Summary({ video, onRegenerate, busy }: { video: VideoInfo; onReg
   const sections = toc(body);
   return (
     <div className="summary">
-      <div>
+      <div className="notes">
         {video.keywords.length > 0 && (
-          <div className="keywords">
-            <p className="eyebrow">Ключевые термины</p>
-            <div className="chips">
+          <div className="terms">
+            <p>Ключевые термины</p>
+            <ul>
               {video.keywords.map((k) => (
-                <span key={k} className="chip">{k}</span>
+                <li key={k}>{k}</li>
               ))}
-            </div>
+            </ul>
           </div>
         )}
         <Markdown text={body} material={video} />
         <div className="toolbar">
           <button className="btn small" onClick={() => download(`${video.title ?? video.video_id}.md`, `# ${video.title ?? video.video_id}\n\n${video.summary}`)}>
-            Скачать .md ↓
+            Скачать конспект (.md)
           </button>
           <button
             className="btn small"
@@ -72,7 +72,7 @@ export function Summary({ video, onRegenerate, busy }: { video: VideoInfo; onReg
       </div>
       {sections.length > 1 && (
         <nav className="toc" aria-label="Содержание">
-          <p className="eyebrow">Содержание</p>
+          <p>Содержание</p>
           {sections.map((t) => (
             <a key={t.id} href={`#${t.id}`}>
               {t.ts && <span className="t">{t.ts}</span>}
@@ -106,12 +106,12 @@ async function streamAnswer(id: string, q: string, history: { q: string; a: stri
 
 function AnswerView({ a, material, live }: { a: Answer; material: Material; live?: boolean }) {
   return (
-    <div className="fade">
-      {a.answer ? <Markdown text={a.answer} material={material} /> : <p className="inline accent"><Eq /> Ищу ответ…</p>}
+    <div>
+      {a.answer ? <Markdown text={a.answer} material={material} /> : <p className="status"><Eq /> Ищу ответ…</p>}
       {live && a.answer && <span className="live-caret" aria-hidden />}
       {a.sources.length > 0 && (
         <div className="sources">
-          <span className="eyebrow">Фрагменты:</span>
+          <span>Фрагменты:</span>
           {a.sources.map((s, j) => (
             <TimestampLink key={j} href={s.url} material={material} className="ts">
               {s.timestamp}
@@ -126,8 +126,8 @@ function AnswerView({ a, material, live }: { a: Answer; material: Material; live
 export function Quiz({ material, questions }: { material: Material; questions: string[] }) {
   return (
     <section className="quiz">
-      <p className="muted">
-        Сначала ответьте сами, потом откройте ответ — он строится по {material.kind === "youtube" || material.kind === "media" ? "расшифровке записи" : "тексту материала"}.
+      <p className="quiz-intro">
+        Сначала ответьте сами, потом откройте ответ. Он строится по {material.kind === "youtube" || material.kind === "media" ? "расшифровке записи" : "тексту материала"}.
       </p>
       <ol className="quiz-list">
         {questions.map((q, i) => (
@@ -158,15 +158,17 @@ function QuizCard({ material, n, q }: { material: Material; n: number; q: string
   }
 
   return (
-    <li className="quiz-card" data-open={answer ? "" : undefined}>
-      <span className="eyebrow">Вопрос {n}</span>
-      <p className="quiz-q">{q}</p>
-      {answer ? (
-        <AnswerView a={answer} material={material} live={live} />
-      ) : (
-        <button className="btn small" onClick={reveal}>Показать ответ</button>
-      )}
-      {error && <ErrorText error={error} />}
+    <li className="quiz-item">
+      <span className="quiz-n" aria-hidden>{n}</span>
+      <div>
+        <p className="quiz-q">{q}</p>
+        {answer ? (
+          <AnswerView a={answer} material={material} live={live} />
+        ) : (
+          <button className="btn small" onClick={reveal}>Показать ответ</button>
+        )}
+        {error && <ErrorText error={error} />}
+      </div>
     </li>
   );
 }
@@ -176,8 +178,8 @@ export function Script({ video, job, failure, busy, onCreate, onRegenerate }: {
 }) {
   if (job) {
     return (
-      <div className="box">
-        <p className="inline accent"><Eq /> {job.status === "queued" ? "Сценарий в очереди…" : "Пишу сценарий — редактор проверяет каждую версию…"}</p>
+      <div className="block">
+        <p className="status"><Eq /> {job.status === "queued" ? "Сценарий в очереди…" : "Пишу сценарий, редактор проверяет каждую версию…"}</p>
         <p className="muted">Конспект уже готов, сценарий появится здесь сам.</p>
       </div>
     );
@@ -194,7 +196,7 @@ export function Script({ video, job, failure, busy, onCreate, onRegenerate }: {
   if (!lines.length) {
     const message = failure?.kind === "process" ? failure.message : video.error;
     return (
-      <div className="box">
+      <div className="block">
         {message ? <ErrorText error={message} /> : <p>Сценария подкаста пока нет.</p>}
         <button className="btn primary" onClick={onCreate} disabled={busy}>{message ? "Повторить" : "Написать сценарий"}</button>
       </div>
@@ -205,7 +207,7 @@ export function Script({ video, job, failure, busy, onCreate, onRegenerate }: {
     <>
       <dl className="dialogue">
         {lines.map((l, i) => (
-          <div key={i} style={idx(i)}>
+          <div key={i}>
             <dt className={l.name && l.name !== first ? "b" : undefined}>{l.name}</dt>
             <dd>{l.text}</dd>
           </div>
@@ -233,18 +235,18 @@ export function Audio({ video, job, failure, busy, onCreate }: { video: VideoInf
 
   if (video.audio_ready) {
     return (
-      <div className="box">
+      <div className="block">
         {/* the API answers Range requests, so playback starts before the whole file is loaded */}
         <audio controls preload="metadata" src={src} />
-        <a className="btn small" href={src} download={`${id}.mp3`}>Скачать mp3 ↓</a>
+        <a className="btn small" href={src} download={`${id}.mp3`}>Скачать MP3</a>
       </div>
     );
   }
   if (job) {
     const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
     return (
-      <div className="box">
-        <p className="inline accent"><Eq /> {job.status === "queued" ? "Озвучка в очереди…" : `Озвучено ${job.done} из ${job.total || "…"} реплик`}</p>
+      <div className="block">
+        <p className="status"><Eq /> {job.status === "queued" ? "Озвучка в очереди…" : `Озвучено ${job.done} из ${job.total || "…"} реплик`}</p>
         <div className="meter" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
           <i style={{ width: `${pct}%` }} />
         </div>
@@ -252,7 +254,7 @@ export function Audio({ video, job, failure, busy, onCreate }: { video: VideoInf
     );
   }
   return (
-    <div className="box">
+    <div className="block">
       {video.podcast_script ? (
         <>
           <p>Аудиоверсия ещё не создана. Сценарий озвучат два голоса ElevenLabs, реплики озвучиваются параллельно.</p>
@@ -293,8 +295,8 @@ export function Recommendations({ id, initial }: { id: string; initial: Recs | n
 
   if (!recs)
     return (
-      <div className="box">
-        <p>Подберём онлайн-курсы и книги по теме видео на сайтах курсов и книжных магазинов.</p>
+      <div className="block">
+        <p>Подберём онлайн-курсы и книги по теме материала на сайтах курсов и книжных магазинов.</p>
         <button className="btn primary" onClick={find} disabled={busy}>
           {busy ? <><Eq /> Ищу…</> : "Найти курсы и книги"}
         </button>
@@ -306,15 +308,15 @@ export function Recommendations({ id, initial }: { id: string; initial: Recs | n
     <div className="recs">
       {([["Курсы", recs.courses], ["Книги", recs.books]] as const).map(([title, items]) => (
         <div key={title}>
-          <p className="eyebrow">{title}</p>
+          <h2 className="label">{title}</h2>
           {items.length ? (
             <ul>
-              {items.map((r, i) => (
-                <li key={r.url} style={idx(i)}>
+              {items.map((r) => (
+                <li key={r.url}>
                   <a href={r.url} target="_blank" rel="noreferrer">
                     <span className="rec-title">{r.title || r.url}</span>
-                    <span className="arrow">↗</span>
-                    <span className="eyebrow">{hostname(r.url)}</span>
+                    <span className="ext" aria-hidden>↗</span>
+                    <span className="rec-site">{hostname(r.url)}</span>
                   </a>
                 </li>
               ))}
@@ -374,21 +376,24 @@ export function Questions({ material }: { material: Material }) {
       )}
 
       {items.map((it, i) => (
-        <div key={i} className="qa fade">
+        <div key={i} className="qa">
           <div className="q">{it.q}</div>
           {it.error ? <ErrorText error={it.error} /> : <AnswerView a={it.a} material={material} live={it.live} />}
         </div>
       ))}
 
       <form
-        className="form"
+        className="form-block"
         onSubmit={(e) => {
           e.preventDefault();
           ask(input);
         }}
       >
-        <input className="field" placeholder="Спросите что-нибудь по видео" aria-label="Вопрос" value={input} onChange={(e) => setInput(e.target.value)} />
-        <button className="btn primary" disabled={pending || !input.trim()}>Спросить →</button>
+        <label className="field-label" htmlFor="qa-input">Ваш вопрос по материалу</label>
+        <div className="form">
+          <input className="field" id="qa-input" autoComplete="off" value={input} onChange={(e) => setInput(e.target.value)} />
+          <button className="btn primary" disabled={pending || !input.trim()}>Спросить</button>
+        </div>
       </form>
     </div>
   );
@@ -416,18 +421,20 @@ export function SourceText({ id, focus }: { id: string; focus: { n: number; key:
   }, [focus, paragraphs]);
 
   if (error) return <ErrorText error={error} />;
-  if (!paragraphs) return <p className="inline muted"><Eq /> Загружаю текст…</p>;
+  if (!paragraphs) return <p className="status muted"><Eq /> Загружаю текст…</p>;
   return (
-    <div className="source-text prose">
-      {paragraphs.map((p, i) => (
-        <div key={p.n}>
-          {p.section && p.section !== paragraphs[i - 1]?.section && <h2>{p.section}</h2>}
-          <p id={`p${p.n}`}>
-            <span className="para-n">¶{p.n}</span>
-            {p.text}
-          </p>
-        </div>
-      ))}
+    <div className="notes">
+      <div className="source-text prose">
+        {paragraphs.map((p, i) => (
+          <div key={p.n}>
+            {p.section && p.section !== paragraphs[i - 1]?.section && <h2>{p.section}</h2>}
+            <p id={`p${p.n}`}>
+              <span className="para-n">¶{p.n}</span>
+              {p.text}
+            </p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

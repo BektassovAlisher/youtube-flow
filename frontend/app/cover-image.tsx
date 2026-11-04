@@ -24,6 +24,7 @@ export default function CoverImage({ src, label, lazy = true }: { src: string | 
       src={src}
       alt=""
       loading={lazy ? "lazy" : undefined}
+      fetchPriority={lazy ? undefined : "high"}
       referrerPolicy="no-referrer"
       onError={() => setFailed(true)}
     />

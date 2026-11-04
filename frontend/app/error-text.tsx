@@ -9,12 +9,12 @@ export default function ErrorText({ error }: { error: Error | string }) {
   const path = usePathname();
   const message = typeof error === "string" ? error : error.message;
   return (
-    <p className="error fade" role="alert">
+    <p className="error" role="alert">
       {message}
       {error instanceof ApiError && error.status === 401 && (
         <>
           {" "}
-          <Link href={`/login?next=${encodeURIComponent(path)}`}>Войти →</Link>
+          <Link href={`/login?next=${encodeURIComponent(path)}`}>Войти</Link>
         </>
       )}
     </p>

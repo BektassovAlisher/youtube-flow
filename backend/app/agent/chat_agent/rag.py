@@ -156,7 +156,7 @@ def ensure_index(video_id: str) -> Chroma:
         _add(video_id, docs)
         log.info("RAG: %s переиндексирован под %s", video_id, EMBEDDER_ID)
     else:
-        raise UserError("Для этого видео нет транскрипта для поиска — перегенерируйте конспект.", status=409)
+        raise UserError("Для этого материала нет текста для поиска. Пересоздайте конспект.", status=409)
     repo.mark_indexed(video_id)
     return _store(video_id)
 
@@ -336,7 +336,7 @@ async def answer_events(video_id: str, question: str, history: list[dict] | None
     if not q:
         raise UserError("Задайте вопрос.")
     if len(q) > 1000:
-        raise UserError("Вопрос слишком длинный — сократите его до 1000 символов.")
+        raise UserError("Вопрос слишком длинный: сократите его до 1000 символов.")
     history = history or []
     key = question_key(q)
     if not history:

@@ -21,7 +21,7 @@ PREFERRED_LANGUAGES = ["ru", "en", "kk"]
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 HOSTS = {"youtube.com", "m.youtube.com", "music.youtube.com", "youtube-nocookie.com", "youtu.be"}
 
-BLOCKED = ("YouTube блокирует запросы с этого сервера — так часто бывает с облачными IP. "
+BLOCKED = ("YouTube блокирует запросы с этого сервера, так часто бывает с облачными IP. "
            "Попробуйте позже или задайте прокси в YOUTUBE_PROXY_URL.")
 
 
@@ -105,13 +105,13 @@ def fetch_subtitles(video_id: str) -> dict:
     except (TranscriptsDisabled, NoTranscriptFound):
         raise NoSubtitles()
     except AgeRestricted:
-        raise UserError("У видео возрастное ограничение — YouTube не отдаёт его субтитры без входа в аккаунт.")
+        raise UserError("У видео возрастное ограничение: YouTube не отдаёт его субтитры без входа в аккаунт.")
     except VideoUnplayable:
         raise UserError("YouTube не даёт воспроизвести это видео (ограничение по региону или правам).")
     except VideoUnavailable:
         raise UserError("Видео недоступно: оно удалено, скрыто или в ссылке ошибка.")
     except InvalidVideoId:
-        raise UserError("Неверный идентификатор видео — проверьте ссылку.")
+        raise UserError("Неверный идентификатор видео. Проверьте ссылку.")
     except (RequestBlocked, IpBlocked):
         raise UserError(BLOCKED, status=503)
     except PoTokenRequired:

@@ -194,7 +194,7 @@ def regenerate(video_id: str, req: Regenerate, request: Request):
     if video is None:
         raise HTTPException(status_code=404, detail="Видео не найдено")
     if jobs.hub.get(video_id, "process") or jobs.hub.get(video_id, "audio"):
-        raise UserError("Видео сейчас обрабатывается — дождитесь окончания.", status=409)
+        raise UserError("Материал сейчас обрабатывается. Дождитесь окончания.", status=409)
     limiter.hit("videos", client_id(request), config.LIMIT_VIDEOS_PER_HOUR)
     repo.clear_for_regenerate(video_id, req.part)
     jobs.start_processing(video_id, video["url"])
@@ -216,7 +216,7 @@ def resume(video_id: str, request: Request):
 @app.delete("/videos/{video_id}", dependencies=protected)
 def delete_video(video_id: str):
     if jobs.hub.active(video_id):
-        raise UserError("Видео сейчас обрабатывается — удалить его можно после окончания.", status=409)
+        raise UserError("Материал сейчас обрабатывается. Удалить его можно после окончания.", status=409)
     if not repo.delete_video(video_id):
         raise HTTPException(status_code=404, detail="Видео не найдено")
     rag.delete_video_index(video_id)
