@@ -1,96 +1,75 @@
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-from typing import List, Any
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 def seconds_to_timestamp(seconds: float) -> str:
     total = int(seconds)
-    h = total // 3600
-    m = (total % 3600) // 60
-    s = total % 60
-    if h > 0:
-        return f"{h:02d}:{m:02d}:{s:02d}"
-    return f"{m:02d}:{s:02d}"
+    h, m, s = total // 3600, (total % 3600) // 60, total % 60
+    return f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
 def seconds_to_youtube_url(video_id: str, seconds: float) -> str:
     return f"https://youtu.be/{video_id}?t={int(seconds)}"
 
 
-class ChukingTranscript:
-    def __init__(self, chunk_size: int = 3000, chunk_overlap: int = 200):
+def to_timestamped_text(segments: list[dict], every: float = 30.0) -> str:
+    """Transcript as paragraphs of ~`every` seconds, one [MM:SS] mark per paragraph.
+
+    A mark on every caption line (a few seconds each) spent ~15-20 % of the prompt on timestamps."""
+    paragraphs, current, start = [], [], None
+    for seg in segments:
+        if start is None:
+            start = seg["start"]
+        current.append(seg["text"])
+        if seg["start"] + seg.get("duration", 0) - start >= every:
+            paragraphs.append(f"[{seconds_to_timestamp(start)}] {' '.join(current)}")
+            current, start = [], None
+    if current:
+        paragraphs.append(f"[{seconds_to_timestamp(start)}] {' '.join(current)}")
+    return "\n".join(paragraphs)
+
+
+def plain_text(segments: list[dict]) -> str:
+    return " ".join(seg["text"] for seg in segments)
+
+
+class TranscriptChunker:
+    """~500-character pieces of consecutive captions for the vector index, each with its start time."""
+
+    def __init__(self, target_chars: int = 500, max_chars: int = 1200):
+        self.target_chars = target_chars
+        # only for unusually long single captions (whole paragraphs in manual subtitles)
         self.splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            separators=["\n\n", "\n", ". ", "! ", "? ", " ", ""],
+            chunk_size=max_chars, chunk_overlap=150, separators=["\n\n", "\n", ". ", "! ", "? ", " ", ""],
         )
 
-    def to_timestamped_text(self, segments: List[Any]) -> str:
-       
-        lines = []
-        for seg in segments:
-            text = seg.text if hasattr(seg, "text") else seg.get("text", "")
-            start = seg.start if hasattr(seg, "start") else seg.get("start", 0)
-            timestamp = seconds_to_timestamp(start)
-            lines.append(f"[{timestamp}] {text.strip()}")
-        return "\n".join(lines)
+    def split(self, segments: list[dict], video_id: str) -> list[Document]:
+        docs, buffer, start, end = [], [], None, 0.0
 
-    def _build_documents(self, segments: List[Any], video_id: str) -> List[Document]:
-        
-        docs = []
-        buffer_text = []
-        buffer_start = None
-        buffer_end = 0
-        buffer_chars = 0
-
-        for seg in segments:
-            text = seg.text if hasattr(seg, "text") else seg.get("text", "")
-            start = seg.start if hasattr(seg, "start") else seg.get("start", 0)
-            duration = seg.duration if hasattr(seg, "duration") else seg.get("duration", 0)
-
-            if buffer_start is None:
-                buffer_start = start
-
-            buffer_text.append(text.strip())
-            buffer_end = start + duration
-            buffer_chars += len(text)
-
-            if buffer_chars >= 500:
-                docs.append(Document(
-                    page_content=" ".join(buffer_text),
-                    metadata={
-                        "start_seconds": round(buffer_start, 2),
-                        "end_seconds": round(buffer_end, 2),
-                        "timestamp": seconds_to_timestamp(buffer_start),
-                        "youtube_url": seconds_to_youtube_url(video_id, buffer_start),
-                    }
-                ))
-                buffer_text = []
-                buffer_start = None
-                buffer_chars = 0
-
-        if buffer_text:
+        def flush():
             docs.append(Document(
-                page_content=" ".join(buffer_text),
+                page_content=" ".join(buffer),
                 metadata={
-                    "start_seconds": round(buffer_start, 2),
-                    "end_seconds": round(buffer_end, 2),
-                    "timestamp": seconds_to_timestamp(buffer_start),
-                    "youtube_url": seconds_to_youtube_url(video_id, buffer_start),
-                }
+                    "start_seconds": round(start, 2),
+                    "end_seconds": round(end, 2),
+                    "timestamp": seconds_to_timestamp(start),
+                    "youtube_url": seconds_to_youtube_url(video_id, start),
+                },
             ))
 
-        return docs
+        for seg in segments:
+            if start is None:
+                start = seg["start"]
+            buffer.append(seg["text"].strip())
+            end = seg["start"] + seg.get("duration", 0)
+            if sum(len(t) for t in buffer) >= self.target_chars:
+                flush()
+                buffer, start = [], None
+        if buffer:
+            flush()
 
-    def split(self, segments: List[Any], video_id: str) -> List[Document]:
-       
-        docs = self._build_documents(segments, video_id)
         chunks = self.splitter.split_documents(docs)
-
-        total = len(chunks)
         for i, chunk in enumerate(chunks):
             chunk.metadata["chunk_index"] = i
-            chunk.metadata["total_chunks"] = total
-
-        print(f"📦 Chunker: {len(segments)} segments → {total} chunks")
+            chunk.metadata["total_chunks"] = len(chunks)
         return chunks
