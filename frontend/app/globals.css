@@ -213,6 +213,21 @@ h1, h2, h3 { margin: 0; font-family: var(--display); font-weight: 700; letter-sp
 .field::placeholder { color: var(--muted); }
 
 .form { display: flex; gap: 10px; margin-top: 32px; max-width: 720px; }
+
+/* link or pasted text */
+.mode { display: inline-flex; gap: 2px; margin-top: 32px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.mode button {
+  padding: 6px 14px; border: 0; border-radius: 7px; background: none; color: var(--muted); cursor: pointer;
+  font: 500 14px var(--font-sans), sans-serif; transition: color 0.2s, background-color 0.2s;
+}
+.mode button:hover:not(:disabled) { color: var(--fg); }
+.mode button[aria-selected="true"] { background: var(--surface-3); color: var(--fg); }
+.mode + .form { margin-top: 12px; }
+.text-form { flex-direction: column; align-items: stretch; }
+.text-form .cta { align-self: flex-start; }
+.text-fields { display: grid; gap: 10px; }
+.textarea { height: auto; min-height: 220px; padding: 14px 18px; resize: vertical; font: 15px/1.6 var(--font-sans), sans-serif; }
+.text-count { font-size: 13px; }
 .form .field { flex: 1 1 auto; height: 52px; padding: 0 18px; font-size: 16px; }
 .form .btn { height: 52px; padding: 0 24px; }
 
@@ -334,6 +349,23 @@ h1, h2, h3 { margin: 0; font-family: var(--display); font-weight: 700; letter-sp
 .card-foot .arrow { color: var(--muted); transition: transform 0.3s var(--ease), color 0.3s; }
 .card:hover .arrow { transform: translateX(4px); color: var(--accent); }
 .thumb { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; background: var(--surface-2); }
+/* articles without a cover and pasted texts: the site's name or the kind on a plain card */
+.thumb-placeholder {
+  display: grid; place-items: center; padding: 0 12px; text-align: center; overflow: hidden;
+  font: 600 15px/1.3 var(--display); color: var(--muted); background: linear-gradient(135deg, var(--surface-2), var(--surface-3));
+}
+.example .thumb-placeholder { font-size: 11px; }
+.cover { display: block; }
+.cover-placeholder {
+  display: grid; place-items: center; align-content: center; gap: 6px; aspect-ratio: 16 / 9; padding: 16px; text-align: center;
+  color: var(--muted); font: 500 15px/1.3 var(--font-sans), sans-serif; background: linear-gradient(135deg, var(--surface-2), var(--surface-3));
+}
+.cover-letter { font: 700 44px/1 var(--display); color: var(--fg-2); }
+
+/* pasted text, paragraph by paragraph; a "¶N" link highlights its paragraph for a moment */
+.source-text p { position: relative; scroll-margin-top: 110px; border-radius: 6px; transition: background-color 0.6s; }
+.source-text p[data-focus] { background: var(--mark); }
+.para-n { margin-right: 10px; font: 600 12px var(--font-mono), monospace; color: var(--accent-70); user-select: none; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag { font: 500 12px/1.8 var(--font-sans), sans-serif; padding: 1px 8px; border-radius: 6px; background: var(--surface-3); color: var(--muted); border: 1px solid var(--line); }
 .empty { padding: 64px 0; color: var(--muted); }

@@ -2,17 +2,19 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useState, type CSSProperties } from "react";
-import { api, CATEGORY, STAGES, type Job, type VideoInfo } from "@/lib/api";
+import { useCallback, useMemo, useState, type CSSProperties } from "react";
+import { api, CATEGORY, KIND_LABEL, lengthLabel, notEducational, siteOf, stagesFor, type Job, type Kind, type VideoInfo } from "@/lib/api";
+import CoverImage from "../../cover-image";
 import Eq from "../../eq";
 import ErrorText from "../../error-text";
 import { useLive } from "./live";
 import Markdown from "./markdown";
-import { Audio, Questions, Quiz, Recommendations, Script, splitQuiz, Summary } from "./panels";
-import { Player, SeekContext, type PlayAt } from "./player";
+import { Audio, Questions, Quiz, Recommendations, Script, SourceText, splitQuiz, Summary } from "./panels";
+import { LocateContext, Player, type PlayAt } from "./player";
 
 const TABS = [
   ["summary", "Конспект"],
+  ["text", "Текст"],
   ["quiz", "Проверь себя"],
   ["script", "Сценарий"],
   ["audio", "Аудио"],
@@ -30,16 +32,26 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
   const [tab, setTab] = useState<Tab>(isTab(initialTab) ? initialTab : "summary");
   const [visited, setVisited] = useState<Set<Tab>>(() => new Set([tab]));
   const [at, setAt] = useState<PlayAt>(null);
+  const [focus, setFocus] = useState<{ n: number; key: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const seek = useCallback((sec: number) => setAt((p) => ({ sec, n: (p?.n ?? 0) + 1 })), []);
 
   // panels stay mounted once opened, so chat history, opened answers and the player survive tab switches
-  function open(t: Tab) {
+  const open = useCallback((t: Tab) => {
     setTab(t);
     setVisited((v) => (v.has(t) ? v : new Set(v).add(t)));
     window.history.replaceState(null, "", t === "summary" ? window.location.pathname : `?tab=${t}`);
-  }
+  }, []);
+  const locate = useMemo(
+    () => ({
+      seek: (sec: number) => setAt((p) => ({ sec, n: (p?.n ?? 0) + 1 })),
+      paragraph: (n: number) => {
+        open("text");
+        setFocus((f) => ({ n, key: (f?.key ?? 0) + 1 }));
+      },
+    }),
+    [open],
+  );
 
   // starts a background job, then follows its progress through the events stream
   async function run(request: () => Promise<VideoInfo | unknown>) {
@@ -55,13 +67,16 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
       setBusy(false);
     }
   }
-  const process = (force = false) => run(() => api<VideoInfo>("videos", { method: "POST", body: JSON.stringify({ video_url: id, force }) }));
+  const process = (force = false) =>
+    run(() => api<VideoInfo>("videos", { method: "POST", body: JSON.stringify(video?.kind === "article" ? { url: video.url, force } : { url: id, force }) }));
+  // continues from the last saved step, whatever the kind of material
+  const resume = () => run(() => api<VideoInfo>(`videos/${id}/resume`, { method: "POST" }));
   const regenerate = (part: "summary" | "script") =>
     run(() => api<VideoInfo>(`videos/${id}/regenerate`, { method: "POST", body: JSON.stringify({ part }) }));
   const createAudio = () => run(() => api(`videos/${id}/audio`, { method: "POST" }));
 
   async function remove() {
-    if (!confirm("Удалить видео и все материалы по нему?")) return;
+    if (!confirm("Удалить материал и всё, что по нему создано?")) return;
     try {
       await api(`videos/${id}`, { method: "DELETE" });
       router.push("/library");
@@ -88,7 +103,7 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
             </>
           ) : (
             <>
-              <h3>Видео не найдено</h3>
+              <h3>Материал не найден</h3>
               <p>Его ещё не обрабатывали или удалили.</p>
               {/^[\w-]{11}$/.test(id) && (
                 <div className="actions notice-actions">
@@ -102,14 +117,17 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
       </>
     );
 
+  const kind: Kind = video.kind ?? "youtube";
   const processJob = jobs.find((j) => j.kind === "process");
   const audioJob = jobs.find((j) => j.kind === "audio");
   const quiz = splitQuiz(video.summary).questions;
-  const tabs = TABS.filter(([k]) => k !== "quiz" || quiz.length > 0);
-  const meta = [CATEGORY[video.category ?? ""], video.language?.toUpperCase(), video.channel].filter(Boolean).join(" · ");
+  const tabs = TABS.filter(([k]) => (k !== "quiz" || quiz.length > 0) && (k !== "text" || kind === "text"));
+  const meta = [kind !== "youtube" && KIND_LABEL[kind], CATEGORY[video.category ?? ""], video.language?.toUpperCase(), video.channel, lengthLabel(video)]
+    .filter((x) => x && x !== CATEGORY.unknown)
+    .join(" · ");
 
   return (
-    <SeekContext.Provider value={seek}>
+    <LocateContext.Provider value={locate}>
       {back}
 
       <div className="vhead">
@@ -117,21 +135,28 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
           {meta && <p className="eyebrow rise">{meta}</p>}
           <h1 className="rise" style={d(1)}>{video.title ?? id}</h1>
           <div className="actions rise" style={d(2)}>
-            <a className="btn small" href={`https://www.youtube.com/watch?v=${id}`} target="_blank" rel="noreferrer">
-              Открыть на YouTube ↗
-            </a>
+            {kind === "youtube" && (
+              <a className="btn small" href={`https://www.youtube.com/watch?v=${id}`} target="_blank" rel="noreferrer">
+                Открыть на YouTube ↗
+              </a>
+            )}
+            {kind === "article" && (
+              <a className="btn small" href={video.url} target="_blank" rel="noreferrer">
+                Открыть статью ↗
+              </a>
+            )}
             <button className="btn small danger" onClick={remove} disabled={jobs.length > 0}>Удалить</button>
           </div>
           {error && <ErrorText error={error} />}
         </div>
         <div className="media rise" style={d(1)}>
-          <Player id={id} at={at} onPlay={seek} onClose={() => setAt(null)} />
+          {kind === "youtube" ? <Player id={id} at={at} onPlay={locate.seek} onClose={() => setAt(null)} /> : <Cover video={video} />}
         </div>
       </div>
 
       {video.status === "rejected" ? (
         <div className="notice fade" role="status">
-          <h3>Похоже, это не обучающее видео</h3>
+          <h3>{notEducational(kind)}</h3>
           <p>Категория: {CATEGORY[video.classification?.category ?? "unknown"] ?? video.classification?.category}</p>
           {video.classification?.reason && <p>{video.classification.reason}</p>}
           <div className="actions notice-actions">
@@ -140,13 +165,14 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
         </div>
       ) : !video.summary ? (
         <Progress
+          kind={kind}
           job={processJob}
           partial={partial}
-          videoId={id}
+          video={video}
           error={video.status === "failed" || failure?.kind === "process" ? (failure?.message ?? video.error) : null}
           stuck={!processJob && video.status === "processing"}
           busy={busy}
-          onResume={() => process()}
+          onResume={resume}
         />
       ) : (
         <>
@@ -166,32 +192,51 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
             visited.has(k) ? (
               <section key={k} className="panel fade" role="tabpanel" hidden={tab !== k}>
                 {k === "summary" && <Summary video={video} busy={busy || !!processJob} onRegenerate={() => regenerate("summary")} />}
-                {k === "quiz" && <Quiz id={id} questions={quiz} />}
+                {k === "text" && <SourceText id={id} focus={focus} />}
+                {k === "quiz" && <Quiz material={video} questions={quiz} />}
                 {k === "script" && (
-                  <Script video={video} job={processJob} failure={failure} busy={busy} onCreate={() => process()} onRegenerate={() => regenerate("script")} />
+                  <Script video={video} job={processJob} failure={failure} busy={busy} onCreate={resume} onRegenerate={() => regenerate("script")} />
                 )}
                 {k === "audio" && <Audio video={video} job={audioJob} failure={failure} busy={busy} onCreate={createAudio} />}
                 {k === "recs" && <Recommendations id={id} initial={video.recommendation} />}
-                {k === "qa" && <Questions id={id} />}
+                {k === "qa" && <Questions material={video} />}
               </section>
             ) : null,
           )}
         </>
       )}
-    </SeekContext.Provider>
+    </LocateContext.Provider>
   );
 }
 
-function Progress({ job, partial, videoId, error, stuck, busy, onResume }: {
-  job?: Job; partial: string; videoId: string; error: string | null; stuck: boolean; busy: boolean; onResume: () => void;
+// articles: their cover (or the site's name), linking to the original; pasted text: a plain card
+function Cover({ video }: { video: VideoInfo }) {
+  const label = video.kind === "article" ? video.channel || siteOf(video.url) : "Текст";
+  if (video.kind === "article" && video.image_url)
+    return (
+      <a className="cover" href={video.url} target="_blank" rel="noreferrer" aria-label="Открыть статью">
+        <CoverImage src={video.image_url} label={label} lazy={false} />
+      </a>
+    );
+  return (
+    <div className="cover-placeholder" aria-hidden>
+      <span className="cover-letter">{label.slice(0, 1).toUpperCase()}</span>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function Progress({ kind, job, partial, video, error, stuck, busy, onResume }: {
+  kind: Kind; job?: Job; partial: string; video: VideoInfo; error: string | null; stuck: boolean; busy: boolean; onResume: () => void;
 }) {
-  const current = STAGES.findIndex(([key]) => key === job?.stage);
+  const stages = stagesFor(kind);
+  const current = stages.findIndex(([key]) => key === job?.stage);
   const active = job ? Math.max(current, 0) : -1;
   return (
     <section className="progress">
       {error ? (
         <div className="notice fade" role="alert">
-          <h3>Не получилось обработать видео</h3>
+          <h3>Не получилось обработать {kind === "youtube" ? "видео" : kind === "article" ? "статью" : "текст"}</h3>
           <p>{error}</p>
           <div className="actions notice-actions">
             <button className="btn small" onClick={onResume} disabled={busy}>Попробовать ещё раз</button>
@@ -200,7 +245,7 @@ function Progress({ job, partial, videoId, error, stuck, busy, onResume }: {
       ) : (
         <>
           <ol className="stages fade" aria-live="polite">
-            {STAGES.map(([key, label], i) => (
+            {stages.map(([key, label], i) => (
               <li key={key} data-state={i < active ? "done" : i === active ? "active" : undefined}>
                 <span className="stage-mark">{i < active ? "✓" : i === active ? <Eq /> : ""}</span>
                 {label}
@@ -209,7 +254,7 @@ function Progress({ job, partial, videoId, error, stuck, busy, onResume }: {
           </ol>
           <p className="stages-hint muted">
             {job?.status === "queued"
-              ? "Видео в очереди: сервер сейчас обрабатывает другие."
+              ? "В очереди: сервер сейчас обрабатывает другие материалы."
               : "Страницу можно закрыть — обработка продолжится на сервере, а конспект появится здесь."}
           </p>
           {stuck && (
@@ -225,7 +270,7 @@ function Progress({ job, partial, videoId, error, stuck, busy, onResume }: {
       {partial && !error && (
         <div className="live-summary fade">
           <p className="eyebrow">Конспект пишется прямо сейчас</p>
-          <Markdown text={partial} videoId={videoId} />
+          <Markdown text={partial} material={video} />
           <span className="live-caret" aria-hidden />
         </div>
       )}

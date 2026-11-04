@@ -3,9 +3,11 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { thumb } from "@/lib/api";
 
-// Timestamps in the summary and answers play the video right here instead of opening YouTube in a new tab.
-export const SeekContext = createContext<(sec: number) => void>(() => {});
-export const useSeek = () => useContext(SeekContext);
+// Places in the summary and answers open on the page itself: a timestamp plays the video here instead of a
+// new YouTube tab, a paragraph number of a pasted text opens it in the "Текст" tab.
+export type Locate = { seek: (sec: number) => void; paragraph: (n: number) => void };
+export const LocateContext = createContext<Locate>({ seek: () => {}, paragraph: () => {} });
+export const useLocate = () => useContext(LocateContext);
 
 export type PlayAt = { sec: number; n: number } | null; // n changes on every seek, even to the same second
 

@@ -3,7 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { api, ApiError, CATEGORY, minutes, thumb, type VideoInfo, type VideoListItem } from "@/lib/api";
+import { api, ApiError, CATEGORY, cover, KIND_LABEL, lengthLabel, notEducational, siteOf, type VideoInfo, type VideoListItem } from "@/lib/api";
+import CoverImage from "./cover-image";
 import Eq from "./eq";
 import ErrorText from "./error-text";
 
@@ -19,8 +20,8 @@ const WAVE = [40, 70, 55, 90, 65, 100, 45, 80, 60, 95, 50, 75, 35, 85, 60, 45, 7
 // each card previews what that step actually produces
 const STEPS = [
   {
-    title: "Транскрипт",
-    text: "Берём субтитры видео на русском, английском или казахском.",
+    title: "Текст",
+    text: "Берём субтитры видео, основной текст статьи без меню и рекламы или ваш текст.",
     preview: (
       <div className="pv-roll">
         {[...TRANSCRIPT, ...TRANSCRIPT].map(([t, line], i) => (
@@ -34,7 +35,7 @@ const STEPS = [
   },
   {
     title: "Проверка",
-    text: "Пропускаем только обучающие видео — клипы и влоги отсеиваются.",
+    text: "Пропускаем учебные материалы — клипы, рекламу и пустые страницы отсеиваем.",
     preview: (
       <>
         <div className="pv-row"><span className="ok">✓</span> Лекция по ML <em>0.98</em></div>
@@ -89,14 +90,19 @@ const d = (n: number) => ({ "--d": n }) as CSSProperties;
 
 // typewriter for the headline: uneven gaps between keystrokes (ms) read as a person typing;
 // fixed values so the server-rendered HTML and the client agree
-const WORD = "Конспект любого урока с YouTube";
+const WORD = "Конспект любого видео или статьи";
 const GAPS = Array.from(WORD, (_, i) => (i ? 40 + ((i * 29) % 50) : 0));
 const KEYSTROKES = GAPS.map((_, i) => 150 + GAPS.slice(0, i + 1).reduce((a, b) => a + b, 0));
 const DONE = KEYSTROKES[KEYSTROKES.length - 1] + 500;
 
+const MIN_TEXT = 300;
+
 export default function Home({ examples }: { examples: VideoListItem[] }) {
   const router = useRouter();
+  const [mode, setMode] = useState<"link" | "text">("link");
   const [url, setUrl] = useState("");
+  const [text, setText] = useState("");
+  const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [rejected, setRejected] = useState<VideoInfo | null>(null);
@@ -108,7 +114,8 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
     setError(null);
     setRejected(null);
     try {
-      const video = await api<VideoInfo>("videos", { method: "POST", body: JSON.stringify({ video_url: url.trim(), force }) });
+      const body = mode === "text" ? { text, title: title.trim() || undefined } : { url: url.trim(), force };
+      const video = await api<VideoInfo>("videos", { method: "POST", body: JSON.stringify(body) });
       if (video.status === "rejected") {
         setRejected(video);
         setBusy(false);
@@ -120,6 +127,8 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
       setBusy(false);
     }
   }
+
+  const ready = mode === "link" ? url.trim().length > 0 : text.trim().length >= MIN_TEXT;
 
   return (
     <>
@@ -140,32 +149,66 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
           </span>
         </h1>
         <p className="subtitle rise" style={d(1)}>
-          Вставьте ссылку на обучающее видео — получите конспект с таймкодами, подкаст на два голоса и ответы на вопросы по
-          видео. Русский, английский, казахский.
+          Вставьте ссылку на обучающее видео или статью — или сам текст. Получите конспект, вопросы для самопроверки,
+          подкаст на два голоса и ответы по материалу.
         </p>
 
+        <div className="mode rise" style={d(2)} role="tablist" aria-label="Что добавить">
+          {(["link", "text"] as const).map((m) => (
+            <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setMode(m)} disabled={busy}>
+              {m === "link" ? "Ссылка" : "Текст"}
+            </button>
+          ))}
+        </div>
+
         <form
-          className="form rise"
+          className={`form rise${mode === "text" ? " text-form" : ""}`}
           style={d(2)}
           onSubmit={(e) => {
             e.preventDefault();
             start();
           }}
         >
-          <input
-            className="field"
-            type="text"
-            inputMode="url"
-            autoComplete="off"
-            spellCheck={false}
-            required
-            placeholder="Ссылка на видео с YouTube"
-            aria-label="Ссылка на YouTube"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            disabled={busy}
-          />
-          <span className="cta" data-waiting={busy || !url.trim() || undefined}>
+          {mode === "link" ? (
+            <input
+              className="field"
+              type="text"
+              inputMode="url"
+              autoComplete="off"
+              spellCheck={false}
+              required
+              placeholder="Ссылка на видео YouTube или на статью"
+              aria-label="Ссылка на видео или статью"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              disabled={busy}
+            />
+          ) : (
+            <div className="text-fields">
+              <input
+                className="field"
+                placeholder="Название (необязательно)"
+                aria-label="Название"
+                maxLength={300}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                disabled={busy}
+              />
+              <textarea
+                className="field textarea"
+                required
+                placeholder="Вставьте текст статьи, главы, лекции или своих заметок"
+                aria-label="Текст"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                disabled={busy}
+              />
+              <span className="muted text-count">
+                {text.length < MIN_TEXT ? `Нужно хотя бы ${MIN_TEXT} символов — сейчас ${text.length}` : `${text.length.toLocaleString("ru-RU")} символов`}
+              </span>
+            </div>
+          )}
+          <span className="cta" data-waiting={busy || !ready || undefined}>
             <span className="cta-glow" aria-hidden>
               <i />
             </span>
@@ -174,7 +217,7 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
             </span>
             <button
               className="btn primary"
-              disabled={busy || !url.trim()}
+              disabled={busy || !ready}
               onPointerDown={(e) => {
                 const r = e.currentTarget.getBoundingClientRect();
                 setRipple({ x: e.clientX - r.left, y: e.clientY - r.top, key: e.timeStamp });
@@ -196,10 +239,10 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
 
         {rejected && (
           <div className="notice fade" role="status">
-            <h3>Похоже, это не обучающее видео</h3>
+            <h3>{notEducational(rejected.kind)}</h3>
             <p>Категория: {CATEGORY[rejected.classification?.category ?? "unknown"] ?? rejected.classification?.category}</p>
             {rejected.classification?.reason && <p>{rejected.classification.reason}</p>}
-            <p className="muted">Конспект лучше всего получается из лекций, уроков и разборов.</p>
+            <p className="muted">Конспект лучше всего получается из лекций, уроков, руководств и разборов.</p>
             <div className="actions notice-actions">
               <button className="btn small" onClick={() => start(true)} disabled={busy}>
                 Всё равно обработать
@@ -215,10 +258,14 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
               {examples.map((v) => (
                 <li key={v.video_id}>
                   <Link href={`/videos/${v.video_id}`} className="example">
-                    <img className="thumb" src={thumb(v.video_id)} alt="" loading="lazy" />
+                    <CoverImage src={cover(v)} label={KIND_LABEL[v.kind]} />
                     <span>
                       <b>{v.title ?? v.video_id}</b>
-                      <small>{[v.language?.toUpperCase(), minutes(v.duration_sec)].filter(Boolean).join(" · ")}</small>
+                      <small>
+                        {[v.kind !== "youtube" && (v.channel || (v.url && siteOf(v.url)) || KIND_LABEL[v.kind]), v.language?.toUpperCase(), lengthLabel(v)]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </small>
                     </span>
                   </Link>
                 </li>
