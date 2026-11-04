@@ -21,7 +21,7 @@ const THEME_SCRIPT = `try{document.documentElement.dataset.theme=localStorage.ge
 
 export const metadata: Metadata = {
   title: "VideoFlow",
-  description: "Конспекты, вопросы для самопроверки и подкасты из обучающих видео, статей и текстов",
+  description: "Конспекты, вопросы для самопроверки и подкасты из обучающих видео, подкастов, статей и документов",
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {

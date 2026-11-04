@@ -127,7 +127,7 @@ export function Quiz({ material, questions }: { material: Material; questions: s
   return (
     <section className="quiz">
       <p className="muted">
-        Сначала ответьте сами, потом откройте ответ — он строится по {material.kind === "youtube" ? "транскрипту видео" : "тексту материала"}.
+        Сначала ответьте сами, потом откройте ответ — он строится по {material.kind === "youtube" || material.kind === "media" ? "расшифровке записи" : "тексту материала"}.
       </p>
       <ol className="quiz-list">
         {questions.map((q, i) => (
@@ -328,7 +328,7 @@ export function Recommendations({ id, initial }: { id: string; initial: Recs | n
   );
 }
 
-const ABOUT = { youtube: "О чём это видео?", article: "О чём эта статья?", text: "О чём этот текст?" } as const;
+const ABOUT = { youtube: "О чём это видео?", media: "О чём эта запись?", article: "О чём эта статья?", text: "О чём этот текст?" } as const;
 const suggestions = (m: Material) => [ABOUT[m.kind], "Какие главные выводы?", "Объясни ключевые термины простыми словами"];
 
 type Item = { q: string; a: Answer; live: boolean; error?: Error };
@@ -360,8 +360,8 @@ export function Questions({ material }: { material: Material }) {
       {items.length === 0 && (
         <>
           <p className="muted">
-            {material.kind === "youtube"
-              ? "Ответы строятся по транскрипту видео, со ссылками на нужные моменты."
+            {material.kind === "youtube" || material.kind === "media"
+              ? "Ответы строятся по расшифровке записи, со ссылками на нужные моменты."
               : "Ответы строятся по тексту, со ссылками на нужные абзацы."}{" "}
             Можно задавать уточняющие вопросы.
           </p>

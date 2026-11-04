@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { api, ApiError, CATEGORY, cover, KIND_LABEL, lengthLabel, notEducational, siteOf, type VideoInfo, type VideoListItem } from "@/lib/api";
+import { api, ApiError, CATEGORY, cover, kindLabel, lengthLabel, notEducational, siteOf, uploadDocument, type VideoInfo, type VideoListItem } from "@/lib/api";
 import CoverImage from "./cover-image";
 import Eq from "./eq";
 import ErrorText from "./error-text";
@@ -21,7 +21,7 @@ const WAVE = [40, 70, 55, 90, 65, 100, 45, 80, 60, 95, 50, 75, 35, 85, 60, 45, 7
 const STEPS = [
   {
     title: "Текст",
-    text: "Берём субтитры видео, основной текст статьи без меню и рекламы или ваш текст.",
+    text: "Берём субтитры или распознаём речь, основной текст статьи без меню и рекламы, ваш текст или PDF.",
     preview: (
       <div className="pv-roll">
         {[...TRANSCRIPT, ...TRANSCRIPT].map(([t, line], i) => (
@@ -108,14 +108,16 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
   const [rejected, setRejected] = useState<VideoInfo | null>(null);
   const [ripple, setRipple] = useState<{ x: number; y: number; key: number } | null>(null);
 
-  // the server answers at once (the work runs in the background); progress is shown on the video page
-  async function start(force = false) {
+  // the server answers at once (the work runs in the background); progress is shown on the material page
+  async function start(force = false, file?: File) {
     setBusy(true);
     setError(null);
     setRejected(null);
     try {
       const body = mode === "text" ? { text, title: title.trim() || undefined } : { url: url.trim(), force };
-      const video = await api<VideoInfo>("videos", { method: "POST", body: JSON.stringify(body) });
+      const video = file
+        ? await uploadDocument(file, title.trim() || undefined)
+        : await api<VideoInfo>("videos", { method: "POST", body: JSON.stringify(body) });
       if (video.status === "rejected") {
         setRejected(video);
         setBusy(false);
@@ -149,8 +151,8 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
           </span>
         </h1>
         <p className="subtitle rise" style={d(1)}>
-          Вставьте ссылку на обучающее видео или статью — или сам текст. Получите конспект, вопросы для самопроверки,
-          подкаст на два голоса и ответы по материалу.
+          Вставьте ссылку на обучающее видео, подкаст или статью — или сам текст, PDF. Получите конспект, вопросы для
+          самопроверки, подкаст на два голоса и ответы по материалу.
         </p>
 
         <div className="mode rise" style={d(2)} role="tablist" aria-label="Что добавить">
@@ -177,8 +179,8 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
               autoComplete="off"
               spellCheck={false}
               required
-              placeholder="Ссылка на видео YouTube или на статью"
-              aria-label="Ссылка на видео или статью"
+              placeholder="Ссылка на видео, подкаст или статью"
+              aria-label="Ссылка на видео, подкаст или статью"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               disabled={busy}
@@ -203,9 +205,24 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
                 onChange={(e) => setText(e.target.value)}
                 disabled={busy}
               />
-              <span className="muted text-count">
-                {text.length < MIN_TEXT ? `Нужно хотя бы ${MIN_TEXT} символов — сейчас ${text.length}` : `${text.length.toLocaleString("ru-RU")} символов`}
-              </span>
+              <div className="text-foot">
+                <span className="muted text-count">
+                  {text.length < MIN_TEXT ? `Нужно хотя бы ${MIN_TEXT} символов — сейчас ${text.length}` : `${text.length.toLocaleString("ru-RU")} символов`}
+                </span>
+                <label className="btn small upload" aria-disabled={busy || undefined}>
+                  Или загрузить файл (PDF, TXT, MD)
+                  <input
+                    type="file"
+                    accept=".pdf,.txt,.md,.markdown,application/pdf,text/plain,text/markdown"
+                    disabled={busy}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = ""; // the same file can be picked again after an error
+                      if (file) start(false, file);
+                    }}
+                  />
+                </label>
+              </div>
             </div>
           )}
           <span className="cta" data-waiting={busy || !ready || undefined}>
@@ -258,11 +275,11 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
               {examples.map((v) => (
                 <li key={v.video_id}>
                   <Link href={`/videos/${v.video_id}`} className="example">
-                    <CoverImage src={cover(v)} label={KIND_LABEL[v.kind]} />
+                    <CoverImage src={cover(v)} label={kindLabel(v)} />
                     <span>
                       <b>{v.title ?? v.video_id}</b>
                       <small>
-                        {[v.kind !== "youtube" && (v.channel || (v.url && siteOf(v.url)) || KIND_LABEL[v.kind]), v.language?.toUpperCase(), lengthLabel(v)]
+                        {[v.kind !== "youtube" && (v.channel || (v.url && siteOf(v.url)) || kindLabel(v)), v.language?.toUpperCase(), lengthLabel(v)]
                           .filter(Boolean)
                           .join(" · ")}
                       </small>
