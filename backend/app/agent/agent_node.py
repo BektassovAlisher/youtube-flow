@@ -1,122 +1,47 @@
+"""LangGraph pipeline for one video.
+
+START → load → transcript → classify ─┬─▶ reject → END
+                                      └─▶ start_pipeline ─┬─▶ summarize → keywords ─┬─▶ END (script exists)
+                                                          │                         └─▶ script ⇄ critic → save_script → END
+                                                          └─▶ index → END
+
+Nodes persist their output and skip saved work, so the same graph resumes an interrupted run."""
+from langgraph.graph import END, START, StateGraph
+
 from agent.agent import (
-    extract_transcript, 
-    classify_node, 
-    reject_node, 
-    summarize_node,
-    keyword_node, 
-    merge_node, 
-    script_node, 
-    critic_node,
-    audio_node, 
-    cache_node, 
-    save_to_db_node,
-    rag_index_node, 
-    recommend_node,
-    GraphState,
-    route_classify,
-    route_cache,
-    route_critic,
-    route_post_save,
+    GraphState, classify_node, critic_node, index_node, keywords_node, load_node, reject_node, route_after_keywords,
+    route_classify, route_critic, save_script_node, script_node, start_pipeline_node, summarize_node, transcript_node,
 )
 
-from langgraph.graph import StateGraph, START, END
+graph = StateGraph(GraphState)
+graph.add_node("load", load_node)
+graph.add_node("transcript", transcript_node)
+graph.add_node("classify", classify_node)
+graph.add_node("reject", reject_node)
+graph.add_node("start_pipeline", start_pipeline_node)
+graph.add_node("summarize", summarize_node)
+graph.add_node("index", index_node)
+graph.add_node("keywords", keywords_node)
+graph.add_node("script", script_node)
+graph.add_node("critic", critic_node)
+graph.add_node("save_script", save_script_node)
+
+graph.add_edge(START, "load")
+graph.add_edge("load", "transcript")
+graph.add_edge("transcript", "classify")
+graph.add_conditional_edges("classify", route_classify, {"start_pipeline": "start_pipeline", "reject": "reject"})
+graph.add_edge("reject", END)
+graph.add_edge("start_pipeline", "summarize")
+graph.add_edge("start_pipeline", "index")
+graph.add_edge("index", END)
+graph.add_edge("summarize", "keywords")
+graph.add_conditional_edges("keywords", route_after_keywords, {"script": "script", "end": END})
+graph.add_edge("script", "critic")
+graph.add_conditional_edges("critic", route_critic, {"script": "script", "save_script": "save_script"})
+graph.add_edge("save_script", END)
+
+app = graph.compile()
 
 
-def start_pipeline_node(state: GraphState):
-    return {}
-
-
-agent = StateGraph(GraphState)
-
-agent.add_node("extract_transcript", extract_transcript)
-agent.add_node("classify", classify_node)
-agent.add_node("rag_index", rag_index_node)
-agent.add_node("reject", reject_node)
-agent.add_node("cache_node", cache_node)
-agent.add_node("start_pipeline", start_pipeline_node)
-agent.add_node("summarize", summarize_node)
-agent.add_node("keywords", keyword_node)
-agent.add_node("merge", merge_node)
-agent.add_node("script", script_node)
-agent.add_node("critic", critic_node)
-agent.add_node("save_to_db", save_to_db_node)
-agent.add_node("audio", audio_node)
-agent.add_node("recommend", recommend_node)
-
-agent.add_edge(START, "cache_node")
-
-agent.add_conditional_edges(
-    "cache_node",
-    route_cache,
-    {
-        "extract_transcript": "extract_transcript",
-        "audio": "audio",
-        "end": END,
-    }
-)
-
-agent.add_edge("extract_transcript", "classify")
-agent.add_edge("rag_index", END)
-
-agent.add_conditional_edges(
-    "classify",
-    route_classify,
-    {
-        "start_pipeline": "start_pipeline",
-        "reject": "reject",
-    }
-)
-
-agent.add_edge("reject", END)
-
-agent.add_edge("start_pipeline", "summarize")
-agent.add_edge("start_pipeline", "keywords")
-agent.add_edge("start_pipeline", "rag_index")
-agent.add_edge("summarize", "merge")
-agent.add_edge("keywords", "merge")
-agent.add_edge("merge", "script")
-agent.add_edge("script", "critic")
-
-agent.add_conditional_edges(
-    "critic",
-    route_critic,
-    {
-        "save_to_db": "save_to_db",
-        "script": "script",
-    }
-)
-
-agent.add_conditional_edges(
-    "save_to_db",
-    route_post_save,
-    {
-        "audio": "audio",
-        "end":   END,
-    }
-)
-
-agent.add_edge("audio",  END)
-
-
-app = agent.compile()
-
-if __name__ == "__main__":
-    print("🚀 Запуск мультиагентной системы...")
-    data = {
-        "video_url": "https://www.youtube.com/watch?v=22tkx79icy4",
-        "retry_count": 0,
-        "max_retries": 2,
-        "critic_feedback": "",
-        "is_valid": False,
-        "is_suitable": False,
-        "cache_hit": False,
-        "agent_execution_order": [],
-        "skip_audio": True,
-    }
-    final_state = app.invoke(data)
-    print("--- ГОТОВО! ---")
-    print(f"Статус RAG: {final_state.get('vector_index_status')}")
-    if not data["skip_audio"]:
-        print("Проверь файл podcast.mp3")
-    else:
-        print("Текст сохранён в БД. Для аудио запусти generate_audio() или установи skip_audio=False.")
+def initial_state(video_id: str, force: bool = False) -> dict:
+    return {"video_id": video_id, "force": force, "retry_count": 0, "max_retries": 2, "agent_execution_order": []}
