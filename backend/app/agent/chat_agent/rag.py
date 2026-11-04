@@ -3,6 +3,7 @@ import asyncio
 import logging
 import re
 import threading
+import time
 from collections import OrderedDict
 from typing import AsyncIterator, Callable
 
@@ -359,15 +360,17 @@ async def answer_events(video_id: str, question: str, history: list[dict] | None
     prompt = QA_PROMPT.format(**PROMPT_PARTS.get(video["kind"], PROMPT_PARTS["youtube"]),
                               outline=summary_outline(video["summary"]), context=_context(docs),
                               history=_history(history), question=q)
-    parts = []
+    parts, started, first = [], time.monotonic(), None
     async for chunk in llm.gemini().astream(prompt):
         text = chunk.text
         if text:
+            first = first or time.monotonic() - started
             parts.append(text)
             yield {"type": "token", "text": text}
     answer = "".join(parts).strip()
     if not answer:
         raise UserError("Модель не вернула ответ. Попробуйте ещё раз.", status=503)
+    log.info("%s: ответ за %.1f с, первые слова через %.1f с", video_id, time.monotonic() - started, first or 0)
     if not history:
         await asyncio.to_thread(repo.save_answer, video_id, key, q, answer, found)
     yield {"type": "done", "cached": False}
