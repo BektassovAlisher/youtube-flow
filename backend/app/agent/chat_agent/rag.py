@@ -16,6 +16,7 @@ import config
 from agent import agent_state as llm
 from db import cache as repo
 from errors import UserError
+from tools import sources
 from tools.chunking_transcript import TranscriptChunker
 
 log = logging.getLogger(__name__)
@@ -124,8 +125,8 @@ def _add(video_id: str, docs: list[Document]) -> None:
         _store(video_id).add_documents(docs, ids=[f"{video_id}_{i}" for i in range(len(docs))])
 
 
-def index_video(video_id: str, segments: list[dict]) -> int:
-    docs = TranscriptChunker().split(segments, video_id)
+def index_video(video_id: str, segments: list[dict], link_for=None) -> int:
+    docs = TranscriptChunker().split(segments, video_id, link_for)
     _add(video_id, docs)
     log.info("RAG: %s — %d фрагментов", video_id, len(docs))
     return len(docs)
@@ -142,7 +143,9 @@ def ensure_index(video_id: str) -> Chroma:
         return _store(video_id)
     segments = repo.load_transcript(video_id)
     if segments:
-        index_video(video_id, segments)
+        video = repo.get_video(video_id) or {}
+        index_video(video_id, segments,
+                    sources.link_builder(video.get("kind", "youtube"), video.get("url"), video.get("anchors")))
     elif collection is not None and collection.count():
         # indexed by an older version (other embedding model) and the transcript was not stored back then
         data = collection.get(include=["documents", "metadatas"])
@@ -248,30 +251,43 @@ def retrieve(video_id: str, query: str, k: int = 5) -> list[Document]:
         best = sorted(range(len(docs)), key=lambda i: scores[i], reverse=True)[:k * 2]
         lexical = [docs[i] for i in best if scores[i] > 0]  # only pieces that really share words with the question
     fused = reciprocal_rank_fusion([semantic, lexical], k=k)
-    return sorted(fused, key=lambda d: d.metadata.get("start_seconds", 0))  # chronological, as the prompt asks
+    # in the order of the material, as the prompt asks (old video indexes have no "order", only the start time)
+    return sorted(fused, key=lambda d: d.metadata.get("order", d.metadata.get("start_seconds", 0)))
 
 
 # ---- answering ----------------------------------------------------------------------------------
 
-QA_PROMPT = """Ты — преподаватель, который отлично знает это видео. Ответь на вопрос слушателя.
+QA_PROMPT = """Ты — преподаватель, который отлично знает {material}. Ответь на вопрос слушателя.
 
----КРАТКО О ВИДЕО (из конспекта)---
+---КРАТКО О МАТЕРИАЛЕ (из конспекта)---
 {outline}
----ФРАГМЕНТЫ ТРАНСКРИПТА---
+---ФРАГМЕНТЫ {fragments}---
 {context}
 ---КОНЕЦ---
 {history}
 Вопрос: {question}
 
 Как отвечать:
-- Опирайся на фрагменты транскрипта, а на общие вопросы («о чём видео», «главные выводы») — на краткое содержание.
-- Таймкоды [MM:SS] бери только из фрагментов выше и ставь в порядке их появления в видео. Не придумывай таймкоды.
-- Если в видео этого нет — скажи прямо, затем коротко ответь из общих знаний, без таймкодов.
+- Опирайся на фрагменты, а на общие вопросы («о чём это», «главные выводы») — на краткое содержание.
+- {places}
+- Если в материале этого нет — скажи прямо, затем коротко ответь из общих знаний, без ссылок на места.
 - Обзор → структура и 3–5 главных идей. Сравнение → плюсы и минусы и вывод автора. «Как сделать» → шаги и \
 предупреждения автора. «Что такое» → простое объяснение с аналогией.
 - Стиль живой и дружелюбный, не энциклопедический. 2–5 абзацев, короче — если вопрос простой.
 - Английские технические термины оставляй на английском. Отвечай на языке вопроса.
 """
+
+PROMPT_PARTS = {
+    "youtube": {"material": "это видео", "fragments": "ТРАНСКРИПТА",
+                "places": "Таймкоды [MM:SS] бери только из фрагментов выше и ставь в порядке их появления в видео. "
+                          "Не придумывай таймкоды."},
+    "article": {"material": "эту статью", "fragments": "СТАТЬИ",
+                "places": "Ссылки на абзацы [¶N] бери только из меток фрагментов выше и ставь в порядке текста. "
+                          "Не придумывай номера."},
+    "text": {"material": "этот текст", "fragments": "ТЕКСТА",
+             "places": "Ссылки на абзацы [¶N] бери только из меток фрагментов выше и ставь в порядке текста. "
+                       "Не придумывай номера."},
+}
 
 
 def summary_outline(summary: str, limit: int = 6000) -> str:
@@ -332,10 +348,12 @@ async def answer_events(video_id: str, question: str, history: list[dict] | None
         raise UserError("Видео не найдено.", status=404)
     retrieval_query = " ".join([h["q"] for h in history[-1:] if h.get("q")] + [q])
     docs = await asyncio.to_thread(retrieve, video_id, retrieval_query, 5)
-    sources = [{"timestamp": d.metadata.get("timestamp", ""), "url": d.metadata.get("youtube_url", "")} for d in docs]
-    yield {"type": "sources", "sources": sources}
+    found = [{"timestamp": d.metadata.get("timestamp", ""), "url": d.metadata.get("link") or d.metadata.get("youtube_url", "")}
+             for d in docs]
+    yield {"type": "sources", "sources": found}
 
-    prompt = QA_PROMPT.format(outline=summary_outline(video["summary"]), context=_context(docs),
+    prompt = QA_PROMPT.format(**PROMPT_PARTS.get(video["kind"], PROMPT_PARTS["youtube"]),
+                              outline=summary_outline(video["summary"]), context=_context(docs),
                               history=_history(history), question=q)
     parts = []
     async for chunk in llm.gemini().astream(prompt):
@@ -347,5 +365,5 @@ async def answer_events(video_id: str, question: str, history: list[dict] | None
     if not answer:
         raise UserError("Модель не вернула ответ. Попробуйте ещё раз.", status=503)
     if not history:
-        await asyncio.to_thread(repo.save_answer, video_id, key, q, answer, sources)
+        await asyncio.to_thread(repo.save_answer, video_id, key, q, answer, found)
     yield {"type": "done", "cached": False}

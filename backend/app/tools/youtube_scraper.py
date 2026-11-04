@@ -148,7 +148,8 @@ def get_transcript(video_id: str) -> dict:
 
 
 def duration_of(segments: list[dict]) -> float:
-    if not segments:
+    """Length of a video transcript; 0 for text materials (they have paragraphs, not times)."""
+    if not segments or "start" not in segments[-1]:
         return 0.0
     last = segments[-1]
     return round(last["start"] + last.get("duration", 0.0), 2)

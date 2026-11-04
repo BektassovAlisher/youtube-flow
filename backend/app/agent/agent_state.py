@@ -37,11 +37,14 @@ def groq_small():
 
 class GraphState(TypedDict, total=False):
     video_id: str
-    force: bool  # process even if the classifier says the video is not educational
+    kind: str  # youtube | article | text
+    url: str
+    anchors: dict | None  # articles: paragraph number -> first words, for links into the original
+    force: bool  # process even if the classifier says the material is not educational
     title: str | None
     channel: str | None
     language: str
-    segments: list[dict]  # transcript: [{start, duration, text}]
+    segments: list[dict]  # video: [{start, duration, text}]; text materials: [{n, section, text}]
     classification: dict
     rejected: bool
     summary: str

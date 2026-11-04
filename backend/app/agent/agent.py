@@ -14,13 +14,15 @@ from agent.agent_state import GraphState, extract_text
 from agent.chat_agent import rag
 from db import cache as repo
 from errors import UserError
+from tools import sources
 from tools.chunking_transcript import plain_text, to_timestamped_text
+from tools.text_sources import fetch_article, word_count
 from tools.youtube_scraper import duration_of, fetch_metadata, get_transcript
 
 log = logging.getLogger(__name__)
 
 HOSTS = ("Алекс", "Марина")
-CATEGORIES = {"educational", "entertainment", "news", "random", "music", "gaming"}
+CATEGORIES = {"educational", "entertainment", "news", "random", "music", "gaming", "advertising"}
 GROQ_CHAR_LIMIT = 8000  # keeps Groq requests within the free-tier tokens-per-minute budget
 TEMPLATE_LABELS = {"содержание раздела", "ключевые понятия и определения", "важные идеи и факты",
                    "примеры и иллюстрации", "связи с другими темами"}
@@ -63,6 +65,9 @@ def load_node(state: GraphState):
     if not video:
         return {}
     out = {
+        "kind": video["kind"],
+        "url": video["url"],
+        "anchors": video["anchors"],
         "title": video["title"],
         "channel": video["channel"],
         "language": video["language"] or "ru",
@@ -78,11 +83,27 @@ def load_node(state: GraphState):
     return out
 
 
+def _article(state: GraphState):
+    video_id = state["video_id"]
+    article = fetch_article(state["url"])
+    segments, words = article["segments"], word_count(article["segments"])
+    repo.save_transcript(video_id, segments, language=article["language"], source="article", duration_sec=None,
+                         title=article["title"], channel=article["site"], image_url=article["image"],
+                         word_count=words, anchors=article["anchors"])
+    _emit(meta={"title": article["title"], "channel": article["site"], "language": article["language"]})
+    log.info("%s: статья, %d абзацев, %d слов", video_id, len(segments), words)
+    return {"segments": segments, "language": article["language"], "title": article["title"],
+            "channel": article["site"], "anchors": article["anchors"], "agent_execution_order": ["transcript"]}
+
+
 def transcript_node(state: GraphState):
+    """Subtitles of a video or the text of an article; pasted text arrives with the request and is already saved."""
     if state.get("segments"):
         return {}
     video_id = state["video_id"]
     _stage(video_id, "transcript")
+    if state.get("kind") == "article":
+        return _article(state)
     with ThreadPoolExecutor(1) as pool:  # title and channel arrive while the subtitles download
         meta = pool.submit(fetch_metadata, video_id)
         data = get_transcript(video_id)
@@ -117,12 +138,23 @@ def classify_node(state: GraphState):
     if state.get("classification"):
         return {}
     video_id = state["video_id"]
+    if state.get("kind") == "text":  # pasted on purpose: nothing to filter out
+        classification = {"category": "unknown", "is_suitable": True, "confidence": 1.0,
+                          "reason": "Текст добавлен вручную."}
+        repo.save_classification(video_id, classification)
+        return {"classification": classification}
     _stage(video_id, "classify")
     segments = state["segments"]
-    prompt = prompts.CLASSIFY.format(
-        title=state.get("title") or "неизвестно", channel=state.get("channel") or "неизвестно",
-        minutes=round(duration_of(segments) / 60), samples=_samples(segments),
-    )
+    if state.get("kind") == "article":
+        prompt = prompts.CLASSIFY_ARTICLE.format(
+            title=state.get("title") or "неизвестно", site=state.get("channel") or "неизвестно",
+            words=word_count(segments), samples=_samples(segments),
+        )
+    else:
+        prompt = prompts.CLASSIFY.format(
+            title=state.get("title") or "неизвестно", channel=state.get("channel") or "неизвестно",
+            minutes=round(duration_of(segments) / 60), samples=_samples(segments),
+        )
     fallback = {"category": "unknown", "is_suitable": True, "confidence": 0.6, "reason": "классификатор не ответил"}
     try:
         parsed = _parse_json(extract_text(llm.groq_small().invoke(prompt)), dict) or {}
@@ -168,7 +200,12 @@ def summarize_node(state: GraphState):
         return {}
     video_id = state["video_id"]
     _stage(video_id, "summary")
-    prompt = prompts.SUMMARY.format(transcript=to_timestamped_text(state["segments"]))
+    kind = state.get("kind", "youtube")
+    if kind == "youtube":
+        prompt = prompts.SUMMARY.format(transcript=to_timestamped_text(state["segments"]))
+    else:
+        prompt = prompts.SUMMARY_TEXT.format(what="статьи" if kind == "article" else "учебного материала",
+                                             text=sources.prompt_text(state["segments"]))
     parts = []
     for chunk in llm.gemini().stream(prompt):  # tokens go straight to the page that waits for the summary
         text = chunk.text
@@ -236,8 +273,9 @@ def index_node(state: GraphState):
     if state.get("indexed") or not state.get("segments"):
         return {}
     video_id = state["video_id"]
+    link_for = sources.link_builder(state.get("kind", "youtube"), state.get("url"), state.get("anchors"))
     try:
-        rag.index_video(video_id, state["segments"])
+        rag.index_video(video_id, state["segments"], link_for)
         repo.mark_indexed(video_id)
         return {"indexed": True}
     except Exception as e:  # noqa: BLE001

@@ -44,6 +44,10 @@ WHISPER_FALLBACK = _bool("WHISPER_FALLBACK", True)
 WHISPER_MAX_MINUTES = _int("WHISPER_MAX_MINUTES", 180)
 YOUTUBE_PROXY_URL = os.getenv("YOUTUBE_PROXY_URL") or None
 
+# articles: the server opens links people send, so internal addresses are refused unless explicitly allowed
+# (e.g. a company wiki on the same network — only when the API is not reachable by strangers)
+ALLOW_PRIVATE_URLS = _bool("ALLOW_PRIVATE_URLS", False)
+
 # access control: when API_TOKEN is set, every POST/DELETE needs "Authorization: Bearer <API_TOKEN>"
 API_TOKEN = os.getenv("API_TOKEN") or None
 LIMIT_VIDEOS_PER_HOUR = _int("LIMIT_VIDEOS_PER_HOUR", 20)

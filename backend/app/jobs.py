@@ -176,12 +176,13 @@ hub = Hub(config.MAX_CONCURRENT_JOBS)
 
 # ---- the two kinds of work --------------------------------------------------------------------
 
-def start_processing(video_id: str, url: str, force: bool = False) -> tuple[Job, bool]:
+def start_processing(video_id: str, url: str, force: bool = False, kind: str | None = None) -> tuple[Job, bool]:
+    """`kind` only matters for a new material; an existing one keeps its own."""
     from agent.agent_node import app as graph, initial_state
     from db import cache as repo
 
     if hub.get(video_id, "process") is None:
-        repo.begin_processing(video_id, url, force)
+        repo.begin_processing(video_id, url, force, kind)
 
     def work(job: Job) -> None:
         try:

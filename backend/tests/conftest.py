@@ -64,6 +64,7 @@ class FakeChat:
 
     def _kind(self, prompt: str) -> str:
         for key, kind in (("учебных конспектов", "summary"), ("сценарист", "script"), ("классификатор", "classify"),
+                          ("подходит ли веб-страница", "classify"),
                           ("Выбери 10-15", "keywords"), ("строгий редактор", "critic"), ("преподаватель", "qa")):
             if key in prompt:
                 return kind
