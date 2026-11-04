@@ -8,7 +8,7 @@ requests==2.34.2
 
 # database
 sqlalchemy==2.1.8
-psycopg2-binary==2.9.13
+psycopg[binary]==3.3.8  # SQLAlchemy 2.1 uses psycopg 3 for postgresql:// URLs
 
 # agents and LLMs
 langgraph==1.2.19
