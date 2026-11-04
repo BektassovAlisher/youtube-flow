@@ -52,3 +52,23 @@ export function Player({ id, at, onPlay, onClose }: { id: string; at: PlayAt; on
     </div>
   );
 }
+
+// media files by direct link (a podcast episode, a lecture recording): the browser plays them itself
+export function MediaPlayer({ url, audio, at, title }: { url: string; audio: boolean; at: PlayAt; title: string }) {
+  const el = useRef<HTMLMediaElement | null>(null);
+  useEffect(() => {
+    if (!at || !el.current) return;
+    el.current.currentTime = at.sec;
+    el.current.play().catch(() => {}); // autoplay can be refused; the position is set anyway
+    if (audio) el.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [at, audio]);
+  return audio ? (
+    <div className="media-file">
+      <span className="cover-letter" aria-hidden>♪</span>
+      <span className="media-file-title">{title}</span>
+      <audio ref={(node) => void (el.current = node)} controls preload="metadata" src={url} />
+    </div>
+  ) : (
+    <video ref={(node) => void (el.current = node)} className="media-video" controls preload="metadata" src={url} />
+  );
+}

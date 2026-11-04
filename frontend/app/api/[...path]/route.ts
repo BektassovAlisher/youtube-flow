@@ -24,7 +24,7 @@ async function proxy(req: NextRequest, ctx: RouteContext<"/api/[...path]">) {
     const res = await fetch(`${API_URL}/${path.map(encodeURIComponent).join("/")}${req.nextUrl.search}`, {
       method: req.method,
       headers,
-      body: changes ? await req.text() : undefined,
+      body: changes ? await req.arrayBuffer() : undefined, // bytes, not text: uploaded files pass through intact
       cache: "no-store",
       signal: req.signal, // a closed tab also closes the upstream request (event streams especially)
     });

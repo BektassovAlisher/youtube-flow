@@ -3,14 +3,14 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState, type CSSProperties } from "react";
-import { api, CATEGORY, KIND_LABEL, lengthLabel, notEducational, siteOf, stagesFor, type Job, type Kind, type VideoInfo } from "@/lib/api";
+import { api, CATEGORY, isAudio, isMediaFile, kindLabel, lengthLabel, notEducational, siteOf, stagesFor, type Job, type Kind, type VideoInfo } from "@/lib/api";
 import CoverImage from "../../cover-image";
 import Eq from "../../eq";
 import ErrorText from "../../error-text";
 import { useLive } from "./live";
 import Markdown from "./markdown";
 import { Audio, Questions, Quiz, Recommendations, Script, SourceText, splitQuiz, Summary } from "./panels";
-import { LocateContext, Player, type PlayAt } from "./player";
+import { LocateContext, MediaPlayer, Player, type PlayAt } from "./player";
 
 const TABS = [
   ["summary", "Конспект"],
@@ -122,8 +122,8 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
   const audioJob = jobs.find((j) => j.kind === "audio");
   const quiz = splitQuiz(video.summary).questions;
   const tabs = TABS.filter(([k]) => (k !== "quiz" || quiz.length > 0) && (k !== "text" || kind === "text"));
-  const meta = [kind !== "youtube" && KIND_LABEL[kind], CATEGORY[video.category ?? ""], video.language?.toUpperCase(), video.channel, lengthLabel(video)]
-    .filter((x) => x && x !== CATEGORY.unknown)
+  const meta = [kind !== "youtube" && kindLabel(video), kind === "media" && siteOf(video.url), CATEGORY[video.category ?? ""], video.language?.toUpperCase(), video.channel, lengthLabel(video)]
+    .filter((x, i, all) => x && x !== CATEGORY.unknown && all.indexOf(x) === i)
     .join(" · ");
 
   return (
@@ -140,9 +140,9 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
                 Открыть на YouTube ↗
               </a>
             )}
-            {kind === "article" && (
+            {(kind === "article" || kind === "media") && (
               <a className="btn small" href={video.url} target="_blank" rel="noreferrer">
-                Открыть статью ↗
+                {kind === "article" ? "Открыть статью ↗" : "Открыть оригинал ↗"}
               </a>
             )}
             <button className="btn small danger" onClick={remove} disabled={jobs.length > 0}>Удалить</button>
@@ -150,7 +150,13 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
           {error && <ErrorText error={error} />}
         </div>
         <div className="media rise" style={d(1)}>
-          {kind === "youtube" ? <Player id={id} at={at} onPlay={locate.seek} onClose={() => setAt(null)} /> : <Cover video={video} />}
+          {kind === "youtube" ? (
+            <Player id={id} at={at} onPlay={locate.seek} onClose={() => setAt(null)} />
+          ) : kind === "media" && isMediaFile(video.url) ? (
+            <MediaPlayer url={video.url} audio={isAudio(video.url)} at={at} title={video.title ?? ""} />
+          ) : (
+            <Cover video={video} />
+          )}
         </div>
       </div>
 
@@ -211,10 +217,10 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
 
 // articles: their cover (or the site's name), linking to the original; pasted text: a plain card
 function Cover({ video }: { video: VideoInfo }) {
-  const label = video.kind === "article" ? video.channel || siteOf(video.url) : "Текст";
-  if (video.kind === "article" && video.image_url)
+  const label = video.kind === "text" ? "Текст" : video.kind === "media" ? siteOf(video.url) : video.channel || siteOf(video.url);
+  if (video.image_url)
     return (
-      <a className="cover" href={video.url} target="_blank" rel="noreferrer" aria-label="Открыть статью">
+      <a className="cover" href={video.url} target="_blank" rel="noreferrer" aria-label="Открыть оригинал">
         <CoverImage src={video.image_url} label={label} lazy={false} />
       </a>
     );
@@ -236,7 +242,7 @@ function Progress({ kind, job, partial, video, error, stuck, busy, onResume }: {
     <section className="progress">
       {error ? (
         <div className="notice fade" role="alert">
-          <h3>Не получилось обработать {kind === "youtube" ? "видео" : kind === "article" ? "статью" : "текст"}</h3>
+          <h3>Не получилось обработать {{ youtube: "видео", media: "запись", article: "статью", text: "текст" }[kind]}</h3>
           <p>{error}</p>
           <div className="actions notice-actions">
             <button className="btn small" onClick={onResume} disabled={busy}>Попробовать ещё раз</button>

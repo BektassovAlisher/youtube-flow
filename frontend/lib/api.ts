@@ -1,5 +1,5 @@
 export type VideoStatus = "processing" | "ready" | "rejected" | "failed";
-export type Kind = "youtube" | "article" | "text";
+export type Kind = "youtube" | "media" | "article" | "text";
 
 export type VideoListItem = {
   video_id: string;
@@ -12,6 +12,7 @@ export type VideoListItem = {
   channel: string | null; // the site for articles
   image_url: string | null; // article cover
   word_count: number | null; // articles and pasted text
+  source?: string | null; // where the text came from: manual | generated | whisper | article | pasted | pdf | file
   status: VideoStatus;
   created_at: string | null;
 };
@@ -102,16 +103,70 @@ export async function askStream(id: string, question: string, history: { q: stri
 // pipeline stages as the API reports them (job.stage); pasted text skips the check
 export function stagesFor(kind: Kind): [string, string][] {
   return [
-    ["transcript", kind === "article" ? "Загружаю статью" : kind === "text" ? "Разбираю текст" : "Получаю субтитры"],
-    ...(kind === "text" ? [] : ([["classify", kind === "article" ? "Проверяю, что это учебный материал" : "Проверяю, что это обучающее видео"]] as [string, string][])),
+    ["transcript", { youtube: "Получаю субтитры", media: "Получаю субтитры или распознаю речь", article: "Загружаю статью", text: "Разбираю текст" }[kind]],
+    ...(kind === "text" ? [] : ([["classify", kind === "article" ? "Проверяю, что это учебный материал" : "Проверяю, что это обучающая запись"]] as [string, string][])),
     ["summary", "Пишу конспект"],
     ["keywords", "Выделяю ключевые термины"],
     ["script", "Пишу сценарий подкаста — редактор проверяет"],
   ];
 }
 
-export const KIND_LABEL: Record<Kind, string> = { youtube: "Видео", article: "Статья", text: "Текст" };
-export const notEducational = (kind: Kind) => (kind === "article" ? "Похоже, это не учебный материал" : "Похоже, это не обучающее видео");
+export const KIND_LABEL: Record<Kind, string> = { youtube: "Видео", media: "Запись", article: "Статья", text: "Текст" };
+export const notEducational = (kind: Kind) =>
+  kind === "article" ? "Похоже, это не учебный материал" : kind === "media" ? "Похоже, это не обучающая запись" : "Похоже, это не обучающее видео";
+
+// recordings from other sites (mirrors backend/app/tools/media.py)
+const AUDIO_SITES = ["soundcloud.com", "podcasts.apple.com", "mixcloud.com"];
+const AUDIO_FILE = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac)$/i;
+const VIDEO_FILE = /\.(mp4|m4v|mov|webm|mkv)$/i;
+const pathOf = (url: string) => {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return "";
+  }
+};
+export const isAudioFile = (url: string) => AUDIO_FILE.test(pathOf(url));
+export const isMediaFile = (url: string) => isAudioFile(url) || VIDEO_FILE.test(pathOf(url));
+export const isAudio = (url: string) => isAudioFile(url) || AUDIO_SITES.some((s) => siteOf(url).endsWith(s));
+export const kindLabel = (v: Pick<VideoListItem, "kind" | "url"> & { source?: string | null; transcript_source?: string | null }) =>
+  v.kind === "media" ? (isAudio(v.url) ? "Аудио" : "Видео") : (v.source ?? v.transcript_source) === "pdf" ? "PDF" : KIND_LABEL[v.kind];
+
+// uploads a PDF, TXT or Markdown file; the result is a text material like pasted text
+export async function uploadDocument(file: File, title?: string): Promise<VideoInfo> {
+  const form = new FormData();
+  form.append("file", file);
+  if (title) form.append("title", title);
+  const res = await fetch("/api/videos/upload", { method: "POST", body: form });
+  if (!res.ok) await fail(res);
+  return res.json();
+}
+// the page can play it itself: YouTube through the embedded player, media files through <audio>/<video>
+export const playable = (m: Pick<VideoListItem, "kind" | "url">) => m.kind === "youtube" || (m.kind === "media" && isMediaFile(m.url));
+
+export function timeUrl(url: string, sec: number): string {
+  const s = Math.floor(sec);
+  try {
+    const u = new URL(url);
+    const site = u.hostname.replace(/^(www|m|player)\./, "");
+    u.hash = "";
+    if (site.endsWith("vimeo.com")) return `${u}#t=${s}s`;
+    if (site.endsWith("dailymotion.com")) u.searchParams.set("start", String(s));
+    else if (site.endsWith("rutube.ru")) u.searchParams.set("t", String(s));
+    else if (site.endsWith("twitch.tv")) u.searchParams.set("t", `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m${s % 60}s`);
+    else if (isMediaFile(url)) return `${u}#t=${s}`;
+    else return url;
+    return String(u);
+  } catch {
+    return url;
+  }
+}
+
+// "12:34" / "1:02:03" -> seconds, else null
+export function clockSeconds(label: string): number | null {
+  const m = label.trim().match(/^(?:(\d+):)?(\d{1,2}):(\d{2})$/);
+  return m ? +(m[1] ?? 0) * 3600 + +m[2] * 60 + +m[3] : null;
+}
 
 export const CATEGORY: Record<string, string> = {
   educational: "Образование",
@@ -139,7 +194,7 @@ export const cover = (v: Pick<VideoListItem, "video_id" | "kind" | "image_url">,
 export const minutes = (sec: number | null) => (sec ? `${Math.round(sec / 60)} мин` : null);
 export const readingTime = (words: number | null) => (words ? `${Math.max(1, Math.round(words / 180))} мин чтения` : null);
 export const lengthLabel = (v: Pick<VideoListItem, "kind" | "duration_sec" | "word_count">) =>
-  v.kind === "youtube" ? minutes(v.duration_sec) : readingTime(v.word_count);
+  v.kind === "youtube" || v.kind === "media" ? minutes(v.duration_sec) : readingTime(v.word_count);
 
 export const siteOf = (url: string) => {
   try {
@@ -164,6 +219,9 @@ export function fragmentUrl(url: string, words?: string | null) {
 
 export function linkLocators(md: string, m: Material): string {
   if (m.kind === "youtube") return linkTimestamps(md, m.video_id);
+  if (m.kind === "media")
+    return md.replace(/\[(\d{1,2}):(\d{2})(?::(\d{2}))?\](?!\()/g, (x, a, b, c) =>
+      `[${x.slice(1, -1)}](${timeUrl(m.url, c ? +a * 3600 + +b * 60 + +c : +a * 60 + +b)})`);
   return md.replace(/\[¶(\d+)\](?!\()/g, (_, n) => `[¶${n}](${m.kind === "text" ? `#p${n}` : fragmentUrl(m.url, m.anchors?.[n])})`);
 }
 

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { CSSProperties } from "react";
-import { addedOn, CATEGORY, cover, KIND_LABEL, lengthLabel, siteOf, type VideoListItem } from "@/lib/api";
+import { addedOn, CATEGORY, cover, kindLabel, lengthLabel, siteOf, type VideoListItem } from "@/lib/api";
 import { serverApi } from "@/lib/server-api";
 import CoverImage from "../cover-image";
 
@@ -46,13 +46,13 @@ export default async function LibraryPage({ searchParams }: PageProps<"/library"
 
       <ul className="grid">
         {videos?.map((v, i) => {
-          const tags = [v.kind !== "youtube" && KIND_LABEL[v.kind], v.language?.toUpperCase(), lengthLabel(v), CATEGORY[v.category ?? ""]]
+          const tags = [v.kind !== "youtube" && kindLabel(v), v.language?.toUpperCase(), lengthLabel(v), CATEGORY[v.category ?? ""]]
             .filter((t): t is string => !!t && t !== CATEGORY.unknown);
           return (
             <li key={v.video_id} className="rise" style={{ "--d": Math.min(i, 12) } as CSSProperties}>
               <Link href={`/videos/${v.video_id}`} className="card">
                 <div className="media">
-                  <CoverImage src={cover(v)} label={v.kind === "article" ? v.channel || siteOf(v.url) : KIND_LABEL[v.kind]} />
+                  <CoverImage src={cover(v)} label={v.kind === "article" ? v.channel || siteOf(v.url) : v.kind === "media" ? siteOf(v.url) : kindLabel(v)} />
                   {v.status === "processing" && <span className="badge">Обрабатывается</span>}
                 </div>
                 <div className="card-body">

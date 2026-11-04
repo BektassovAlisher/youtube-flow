@@ -1,17 +1,23 @@
 "use client";
 
+import { Children, isValidElement, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
-import { linkLocators, paragraphTarget, seekTarget, type Material } from "@/lib/api";
+import { clockSeconds, linkLocators, paragraphTarget, playable, seekTarget, type Material } from "@/lib/api";
 import { useLocate } from "./player";
 
-// A plain click on a place reference opens it right here: a timestamp plays the video in the page's player,
-// a paragraph of a pasted text opens it in the "Текст" tab. Ctrl/cmd/middle click and article paragraphs
-// (links into the original page) open a new tab as usual.
+const textOf = (node: ReactNode): string =>
+  Children.toArray(node).map((c) => (typeof c === "string" || typeof c === "number" ? String(c) : isValidElement(c) ? textOf((c.props as { children?: ReactNode }).children) : "")).join("");
+
+// A plain click on a place reference opens it right here: a timestamp plays the recording in the page's player,
+// a paragraph of a pasted text opens it in the "Текст" tab. Ctrl/cmd/middle click, article paragraphs and
+// recordings the page cannot play (links into the original page) open a new tab as usual.
 export function TimestampLink({ href, material, className, children }: { href?: string; material: Material; className?: string; children: React.ReactNode }) {
   const locate = useLocate();
-  const sec = seekTarget(href, material.video_id);
+  // a timestamp's label is its time: that is how links of recordings from other sites are recognized
+  const clock = clockSeconds(textOf(children));
+  const sec = material.kind === "youtube" ? seekTarget(href, material.video_id) : playable(material) ? clock : null;
   const paragraph = paragraphTarget(href);
-  const place = sec !== null || paragraph !== null || /#:~:text=/.test(href ?? "");
+  const place = sec !== null || clock !== null || paragraph !== null || /#:~:text=/.test(href ?? "");
   return (
     <a
       href={href}
