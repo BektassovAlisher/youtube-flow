@@ -1,7 +1,8 @@
 import Link from "next/link";
 import type { CSSProperties } from "react";
-import { addedOn, CATEGORY, minutes, thumb, type VideoListItem } from "@/lib/api";
+import { addedOn, CATEGORY, cover, KIND_LABEL, lengthLabel, siteOf, type VideoListItem } from "@/lib/api";
 import { serverApi } from "@/lib/server-api";
+import CoverImage from "../cover-image";
 
 const PAGE = 24;
 
@@ -19,11 +20,11 @@ export default async function LibraryPage({ searchParams }: PageProps<"/library"
     <>
       <div className="bar rise">
         <div>
-          {videos && <p className="eyebrow">{q ? `Найдено: ${total}` : `${total} видео`}</p>}
+          {videos && <p className="eyebrow">{q ? `Найдено: ${total}` : `Материалов: ${total}`}</p>}
           <h1 className="section-title">Библиотека</h1>
         </div>
         <form className="search" action="/library">
-          <input className="field" type="search" name="q" defaultValue={q} placeholder="Поиск по названию или каналу" aria-label="Поиск" />
+          <input className="field" type="search" name="q" defaultValue={q} placeholder="Название, канал или сайт" aria-label="Поиск" />
         </form>
       </div>
 
@@ -45,12 +46,13 @@ export default async function LibraryPage({ searchParams }: PageProps<"/library"
 
       <ul className="grid">
         {videos?.map((v, i) => {
-          const tags = [v.language?.toUpperCase(), minutes(v.duration_sec), CATEGORY[v.category ?? ""]].filter(Boolean);
+          const tags = [v.kind !== "youtube" && KIND_LABEL[v.kind], v.language?.toUpperCase(), lengthLabel(v), CATEGORY[v.category ?? ""]]
+            .filter((t): t is string => !!t && t !== CATEGORY.unknown);
           return (
             <li key={v.video_id} className="rise" style={{ "--d": Math.min(i, 12) } as CSSProperties}>
               <Link href={`/videos/${v.video_id}`} className="card">
                 <div className="media">
-                  <img className="thumb" src={thumb(v.video_id)} alt="" loading="lazy" />
+                  <CoverImage src={cover(v)} label={v.kind === "article" ? v.channel || siteOf(v.url) : KIND_LABEL[v.kind]} />
                   {v.status === "processing" && <span className="badge">Обрабатывается</span>}
                 </div>
                 <div className="card-body">

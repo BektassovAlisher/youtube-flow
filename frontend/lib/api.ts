@@ -1,16 +1,23 @@
 export type VideoStatus = "processing" | "ready" | "rejected" | "failed";
+export type Kind = "youtube" | "article" | "text";
 
 export type VideoListItem = {
   video_id: string;
+  kind: Kind;
   title: string | null;
   url: string;
   language: string | null;
   duration_sec: number | null;
   category: string | null;
-  channel: string | null;
+  channel: string | null; // the site for articles
+  image_url: string | null; // article cover
+  word_count: number | null; // articles and pasted text
   status: VideoStatus;
   created_at: string | null;
 };
+
+// what links to places inside a material need
+export type Material = Pick<VideoListItem, "video_id" | "kind" | "url"> & { anchors?: Record<string, string> | null };
 
 export type Job = { kind: "process" | "audio"; status: "queued" | "running"; stage: string | null; done: number; total: number };
 export type Classification = { category: string; is_suitable: boolean; confidence: number; reason: string };
@@ -31,6 +38,7 @@ export type VideoInfo = VideoListItem & {
   force: boolean;
   indexed: boolean;
   transcript_source: string | null;
+  anchors: Record<string, string> | null;
   jobs: Job[];
 };
 
@@ -91,14 +99,19 @@ export async function askStream(id: string, question: string, history: { q: stri
   await readNdjson(res, onEvent);
 }
 
-// pipeline stages as the API reports them (job.stage)
-export const STAGES = [
-  ["transcript", "Получаю субтитры"],
-  ["classify", "Проверяю, что это обучающее видео"],
-  ["summary", "Пишу конспект"],
-  ["keywords", "Выделяю ключевые термины"],
-  ["script", "Пишу сценарий подкаста — редактор проверяет"],
-] as const;
+// pipeline stages as the API reports them (job.stage); pasted text skips the check
+export function stagesFor(kind: Kind): [string, string][] {
+  return [
+    ["transcript", kind === "article" ? "Загружаю статью" : kind === "text" ? "Разбираю текст" : "Получаю субтитры"],
+    ...(kind === "text" ? [] : ([["classify", kind === "article" ? "Проверяю, что это учебный материал" : "Проверяю, что это обучающее видео"]] as [string, string][])),
+    ["summary", "Пишу конспект"],
+    ["keywords", "Выделяю ключевые термины"],
+    ["script", "Пишу сценарий подкаста — редактор проверяет"],
+  ];
+}
+
+export const KIND_LABEL: Record<Kind, string> = { youtube: "Видео", article: "Статья", text: "Текст" };
+export const notEducational = (kind: Kind) => (kind === "article" ? "Похоже, это не учебный материал" : "Похоже, это не обучающее видео");
 
 export const CATEGORY: Record<string, string> = {
   educational: "Образование",
@@ -107,6 +120,7 @@ export const CATEGORY: Record<string, string> = {
   music: "Музыка",
   gaming: "Игры",
   random: "Разное",
+  advertising: "Реклама",
   unknown: "Без категории",
 };
 
@@ -118,7 +132,22 @@ export function addedOn(createdAt: string | null): string | null {
 
 export const thumb = (id: string, size = "mqdefault") => `https://img.youtube.com/vi/${id}/${size}.jpg`;
 
+// picture for cards: the video frame, the article's cover, or none (a placeholder is drawn)
+export const cover = (v: Pick<VideoListItem, "video_id" | "kind" | "image_url">, size?: string) =>
+  v.kind === "youtube" ? thumb(v.video_id, size) : v.image_url;
+
 export const minutes = (sec: number | null) => (sec ? `${Math.round(sec / 60)} мин` : null);
+export const readingTime = (words: number | null) => (words ? `${Math.max(1, Math.round(words / 180))} мин чтения` : null);
+export const lengthLabel = (v: Pick<VideoListItem, "kind" | "duration_sec" | "word_count">) =>
+  v.kind === "youtube" ? minutes(v.duration_sec) : readingTime(v.word_count);
+
+export const siteOf = (url: string) => {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+};
 
 // "[12:34]" / "[1:02:03]" -> markdown link to that moment of the video
 export function linkTimestamps(md: string, videoId: string): string {
@@ -127,6 +156,21 @@ export function linkTimestamps(md: string, videoId: string): string {
     return `[${m.slice(1, -1)}](https://youtu.be/${videoId}?t=${sec})`;
   });
 }
+
+// "[¶12]" -> the 12th paragraph: in the original page (text fragment) for articles, on this page for pasted text
+export function fragmentUrl(url: string, words?: string | null) {
+  return words ? `${url}#:~:text=${encodeURIComponent(words).replace(/-/g, "%2D")}` : url;
+}
+
+export function linkLocators(md: string, m: Material): string {
+  if (m.kind === "youtube") return linkTimestamps(md, m.video_id);
+  return md.replace(/\[¶(\d+)\](?!\()/g, (_, n) => `[¶${n}](${m.kind === "text" ? `#p${n}` : fragmentUrl(m.url, m.anchors?.[n])})`);
+}
+
+export const paragraphTarget = (href: string | undefined) => {
+  const m = href?.match(/^#p(\d+)$/);
+  return m ? +m[1] : null;
+};
 
 // seconds of a youtu.be/<id>?t=<sec> link to this very video, else null
 export function seekTarget(href: string | undefined, videoId: string): number | null {

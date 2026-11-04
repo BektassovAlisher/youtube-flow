@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { api, ApiError, askStream, type Answer, type Job, type Recs, type VideoInfo } from "@/lib/api";
+import { api, ApiError, askStream, type Answer, type Job, type Material, type Recs, type VideoInfo } from "@/lib/api";
 import Eq from "../../eq";
 import ErrorText from "../../error-text";
 import type { Failure } from "./live";
@@ -24,10 +24,10 @@ export function splitQuiz(md: string) {
   return { body: [...lines.slice(0, start), ...lines.slice(end)].join("\n"), questions };
 }
 
-// "## [04:12] Title" -> { id: "l<line>", ts: "04:12", title }; ids match the h2 ids set in <Markdown>
+// "## [04:12] Title" or "## [¶7] Title" -> { id: "l<line>", ts, title }; ids match the h2 ids set in <Markdown>
 function toc(md: string) {
   return md.split("\n").flatMap((l, i) => {
-    const m = l.match(/^##\s+(?:\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*)?(.+)/);
+    const m = l.match(/^##\s+(?:\[(\d{1,2}:\d{2}(?::\d{2})?|¶\d+)\]\s*)?(.+)/);
     return m ? [{ id: `l${i + 1}`, ts: m[1], title: m[2].replace(/\*\*/g, "") }] : [];
   });
 }
@@ -56,7 +56,7 @@ export function Summary({ video, onRegenerate, busy }: { video: VideoInfo; onReg
             </div>
           </div>
         )}
-        <Markdown text={body} videoId={video.video_id} />
+        <Markdown text={body} material={video} />
         <div className="toolbar">
           <button className="btn small" onClick={() => download(`${video.title ?? video.video_id}.md`, `# ${video.title ?? video.video_id}\n\n${video.summary}`)}>
             Скачать .md ↓
@@ -104,16 +104,16 @@ async function streamAnswer(id: string, q: string, history: { q: string; a: stri
   push();
 }
 
-function AnswerView({ a, id, live }: { a: Answer; id: string; live?: boolean }) {
+function AnswerView({ a, material, live }: { a: Answer; material: Material; live?: boolean }) {
   return (
     <div className="fade">
-      {a.answer ? <Markdown text={a.answer} videoId={id} /> : <p className="inline accent"><Eq /> Ищу ответ в транскрипте…</p>}
+      {a.answer ? <Markdown text={a.answer} material={material} /> : <p className="inline accent"><Eq /> Ищу ответ…</p>}
       {live && a.answer && <span className="live-caret" aria-hidden />}
       {a.sources.length > 0 && (
         <div className="sources">
           <span className="eyebrow">Фрагменты:</span>
           {a.sources.map((s, j) => (
-            <TimestampLink key={j} href={s.url} videoId={id} className="ts">
+            <TimestampLink key={j} href={s.url} material={material} className="ts">
               {s.timestamp}
             </TimestampLink>
           ))}
@@ -123,20 +123,22 @@ function AnswerView({ a, id, live }: { a: Answer; id: string; live?: boolean }) 
   );
 }
 
-export function Quiz({ id, questions }: { id: string; questions: string[] }) {
+export function Quiz({ material, questions }: { material: Material; questions: string[] }) {
   return (
     <section className="quiz">
-      <p className="muted">Сначала ответьте сами, потом откройте ответ — он строится по транскрипту видео.</p>
+      <p className="muted">
+        Сначала ответьте сами, потом откройте ответ — он строится по {material.kind === "youtube" ? "транскрипту видео" : "тексту материала"}.
+      </p>
       <ol className="quiz-list">
         {questions.map((q, i) => (
-          <QuizCard key={q} id={id} n={i + 1} q={q} />
+          <QuizCard key={q} material={material} n={i + 1} q={q} />
         ))}
       </ol>
     </section>
   );
 }
 
-function QuizCard({ id, n, q }: { id: string; n: number; q: string }) {
+function QuizCard({ material, n, q }: { material: Material; n: number; q: string }) {
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [live, setLive] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -146,7 +148,7 @@ function QuizCard({ id, n, q }: { id: string; n: number; q: string }) {
     setError(null);
     setAnswer({ answer: "", sources: [] });
     try {
-      await streamAnswer(id, q, [], setAnswer); // cached on the server: the next reveal is instant and free
+      await streamAnswer(material.video_id, q, [], setAnswer); // cached on the server: the next reveal is instant and free
     } catch (e) {
       setAnswer(null);
       setError(e as Error);
@@ -160,7 +162,7 @@ function QuizCard({ id, n, q }: { id: string; n: number; q: string }) {
       <span className="eyebrow">Вопрос {n}</span>
       <p className="quiz-q">{q}</p>
       {answer ? (
-        <AnswerView a={answer} id={id} live={live} />
+        <AnswerView a={answer} material={material} live={live} />
       ) : (
         <button className="btn small" onClick={reveal}>Показать ответ</button>
       )}
@@ -326,11 +328,13 @@ export function Recommendations({ id, initial }: { id: string; initial: Recs | n
   );
 }
 
-const SUGGESTIONS = ["О чём это видео?", "Какие главные выводы?", "Объясни ключевые термины простыми словами"];
+const ABOUT = { youtube: "О чём это видео?", article: "О чём эта статья?", text: "О чём этот текст?" } as const;
+const suggestions = (m: Material) => [ABOUT[m.kind], "Какие главные выводы?", "Объясни ключевые термины простыми словами"];
 
 type Item = { q: string; a: Answer; live: boolean; error?: Error };
 
-export function Questions({ id }: { id: string }) {
+export function Questions({ material }: { material: Material }) {
+  const id = material.video_id;
   const [items, setItems] = useState<Item[]>([]);
   const [input, setInput] = useState("");
   const pending = items.some((i) => i.live);
@@ -355,9 +359,14 @@ export function Questions({ id }: { id: string }) {
     <div className="chat">
       {items.length === 0 && (
         <>
-          <p className="muted">Ответы строятся по транскрипту видео, со ссылками на нужные моменты. Можно задавать уточняющие вопросы.</p>
+          <p className="muted">
+            {material.kind === "youtube"
+              ? "Ответы строятся по транскрипту видео, со ссылками на нужные моменты."
+              : "Ответы строятся по тексту, со ссылками на нужные абзацы."}{" "}
+            Можно задавать уточняющие вопросы.
+          </p>
           <div className="suggest">
-            {SUGGESTIONS.map((s) => (
+            {suggestions(material).map((s) => (
               <button key={s} className="btn small" onClick={() => ask(s)}>{s}</button>
             ))}
           </div>
@@ -367,7 +376,7 @@ export function Questions({ id }: { id: string }) {
       {items.map((it, i) => (
         <div key={i} className="qa fade">
           <div className="q">{it.q}</div>
-          {it.error ? <ErrorText error={it.error} /> : <AnswerView a={it.a} id={id} live={it.live} />}
+          {it.error ? <ErrorText error={it.error} /> : <AnswerView a={it.a} material={material} live={it.live} />}
         </div>
       ))}
 
@@ -381,6 +390,44 @@ export function Questions({ id }: { id: string }) {
         <input className="field" placeholder="Спросите что-нибудь по видео" aria-label="Вопрос" value={input} onChange={(e) => setInput(e.target.value)} />
         <button className="btn primary" disabled={pending || !input.trim()}>Спросить →</button>
       </form>
+    </div>
+  );
+}
+
+type Paragraph = { n: number; section: string | null; text: string };
+
+// the pasted text itself, paragraph by paragraph: "¶N" links in the summary and answers land here
+export function SourceText({ id, focus }: { id: string; focus: { n: number; key: number } | null }) {
+  const [paragraphs, setParagraphs] = useState<Paragraph[] | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+
+  useEffect(() => {
+    api<{ segments: Paragraph[] }>(`videos/${id}/source`).then((r) => setParagraphs(r.segments), setError);
+  }, [id]);
+
+  useEffect(() => {
+    if (!focus || !paragraphs) return;
+    const el = document.getElementById(`p${focus.n}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.dataset.focus = "";
+    const t = setTimeout(() => delete el.dataset.focus, 2200);
+    return () => clearTimeout(t);
+  }, [focus, paragraphs]);
+
+  if (error) return <ErrorText error={error} />;
+  if (!paragraphs) return <p className="inline muted"><Eq /> Загружаю текст…</p>;
+  return (
+    <div className="source-text prose">
+      {paragraphs.map((p, i) => (
+        <div key={p.n}>
+          {p.section && p.section !== paragraphs[i - 1]?.section && <h2>{p.section}</h2>}
+          <p id={`p${p.n}`}>
+            <span className="para-n">¶{p.n}</span>
+            {p.text}
+          </p>
+        </div>
+      ))}
     </div>
   );
 }
