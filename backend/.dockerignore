@@ -2,5 +2,7 @@
 .git
 venv/
 **/__pycache__/
+.pytest_cache/
 *.mp3
 vector_storage/
+tests/
