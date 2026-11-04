@@ -125,8 +125,8 @@ def _add(video_id: str, docs: list[Document]) -> None:
         _store(video_id).add_documents(docs, ids=[f"{video_id}_{i}" for i in range(len(docs))])
 
 
-def index_video(video_id: str, segments: list[dict], link_for=None) -> int:
-    docs = TranscriptChunker().split(segments, video_id, link_for)
+def index_video(video_id: str, segments: list[dict], link_for=None, time_link=None) -> int:
+    docs = TranscriptChunker().split(segments, video_id, link_for, time_link)
     _add(video_id, docs)
     log.info("RAG: %s — %d фрагментов", video_id, len(docs))
     return len(docs)
@@ -144,8 +144,9 @@ def ensure_index(video_id: str) -> Chroma:
     segments = repo.load_transcript(video_id)
     if segments:
         video = repo.get_video(video_id) or {}
-        index_video(video_id, segments,
-                    sources.link_builder(video.get("kind", "youtube"), video.get("url"), video.get("anchors")))
+        kind = video.get("kind", "youtube")
+        index_video(video_id, segments, sources.link_builder(kind, video.get("url"), video.get("anchors")),
+                    sources.time_builder(kind, video.get("url"), video_id))
     elif collection is not None and collection.count():
         # indexed by an older version (other embedding model) and the transcript was not stored back then
         data = collection.get(include=["documents", "metadatas"])
@@ -281,6 +282,9 @@ PROMPT_PARTS = {
     "youtube": {"material": "это видео", "fragments": "ТРАНСКРИПТА",
                 "places": "Таймкоды [MM:SS] бери только из фрагментов выше и ставь в порядке их появления в видео. "
                           "Не придумывай таймкоды."},
+    "media": {"material": "эту запись", "fragments": "РАСШИФРОВКИ",
+              "places": "Таймкоды [MM:SS] бери только из фрагментов выше и ставь в порядке их появления в записи. "
+                        "Не придумывай таймкоды."},
     "article": {"material": "эту статью", "fragments": "СТАТЬИ",
                 "places": "Ссылки на абзацы [¶N] бери только из меток фрагментов выше и ставь в порядке текста. "
                           "Не придумывай номера."},

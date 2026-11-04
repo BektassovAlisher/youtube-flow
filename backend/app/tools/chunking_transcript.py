@@ -46,21 +46,22 @@ class TranscriptChunker:
             chunk_size=max_chars, chunk_overlap=150, separators=["\n\n", "\n", ". ", "! ", "? ", " ", ""],
         )
 
-    def split(self, segments: list[dict], video_id: str, link_for=None) -> list[Document]:
-        """`link_for(n)` builds the link of paragraph n for text materials; videos link to the second."""
+    def split(self, segments: list[dict], video_id: str, link_for=None, time_link=None) -> list[Document]:
+        """`link_for(n)` links paragraph n of a text material, `time_link(sec)` a second of a recording
+        (youtu.be by default)."""
         docs = self._paragraphs(segments, link_for) if segments and "start" not in segments[0] \
-            else self._captions(segments, video_id)
+            else self._captions(segments, video_id, time_link)
         chunks = self.splitter.split_documents(docs)
         for i, chunk in enumerate(chunks):
             chunk.metadata["chunk_index"] = i
             chunk.metadata["total_chunks"] = len(chunks)
         return chunks
 
-    def _captions(self, segments: list[dict], video_id: str) -> list[Document]:
+    def _captions(self, segments: list[dict], video_id: str, time_link=None) -> list[Document]:
         docs, buffer, start, end = [], [], None, 0.0
 
         def flush():
-            url = seconds_to_youtube_url(video_id, start)
+            url = time_link(start) if time_link else seconds_to_youtube_url(video_id, start)
             docs.append(Document(
                 page_content=" ".join(buffer),
                 metadata={

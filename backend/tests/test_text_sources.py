@@ -26,20 +26,22 @@ def test_canonical_url_drops_tracking_and_fragment():
     ("aircAruvnKk", "youtube"),
     ("https://habr.com/ru/articles/123456/", "article"),
     ("ru.wikipedia.org/wiki/Градиентный_спуск", "article"),
-    ("https://vk.com/@team-article", "article"),  # vk articles are fine, vk videos are not
+    ("https://vk.com/@team-article", "article"),  # vk articles are articles, vk videos are recordings
+    ("https://vimeo.com/76979871", "media"),
+    ("https://vk.com/video-123_456", "media"),
+    ("https://soundcloud.com/artist/track", "media"),
+    ("https://example.com/podcast/episode-12.mp3?token=1", "media"),
 ])
 def test_detect_url(link, kind):
     detected_kind, material_id, url = sources.detect_url(link)
     assert detected_kind == kind
     assert url.startswith("https://")
-    assert material_id.startswith("a-") if kind == "article" else len(material_id) == 11
+    assert material_id.startswith({"article": "a-", "media": "m-"}.get(kind, "")) and (kind != "youtube" or len(material_id) == 11)
 
 
 @pytest.mark.parametrize("link, hint", [
     ("", "Вставьте ссылку"),
     ("какой-то текст", "Вставьте ссылку"),
-    ("https://vimeo.com/123", "vimeo.com пока не поддерживаются"),
-    ("https://vk.com/video-1_2", "vk.com пока не поддерживаются"),
     ("https://www.youtube.com/@channel", "канал"),
     ("mailto:someone@example.com", "http:// или https://"),
 ])

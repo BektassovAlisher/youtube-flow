@@ -77,6 +77,7 @@ def _item(v: Video) -> dict:
         "channel": v.channel,
         "image_url": v.image_url,
         "word_count": v.word_count,
+        "source": v.transcript_source,
         "status": v.status,
         "created_at": v.created_at,
     }

@@ -16,6 +16,7 @@ from db import cache as repo
 from errors import UserError
 from tools import sources
 from tools.chunking_transcript import plain_text, to_timestamped_text
+from tools.media import fetch_media
 from tools.text_sources import fetch_article, word_count
 from tools.youtube_scraper import duration_of, fetch_metadata, get_transcript
 
@@ -96,14 +97,30 @@ def _article(state: GraphState):
             "channel": article["site"], "anchors": article["anchors"], "agent_execution_order": ["transcript"]}
 
 
+def _media(state: GraphState):
+    video_id = state["video_id"]
+    rec = fetch_media(state["url"])
+    segments = rec["segments"]
+    repo.save_transcript(video_id, segments, language=rec["language"], source=rec["source"],
+                         duration_sec=rec["duration_sec"], title=rec["title"], channel=rec["channel"],
+                         image_url=rec["image"])
+    _emit(meta={"title": rec["title"], "channel": rec["channel"], "language": rec["language"]})
+    log.info("%s: запись, %d сегментов, источник %s", video_id, len(segments), rec["source"])
+    return {"segments": segments, "language": rec["language"], "title": rec["title"], "channel": rec["channel"],
+            "agent_execution_order": ["transcript"]}
+
+
 def transcript_node(state: GraphState):
-    """Subtitles of a video or the text of an article; pasted text arrives with the request and is already saved."""
+    """Subtitles (or recognized speech) of a recording, or the text of an article; pasted text arrives with
+    the request and is already saved."""
     if state.get("segments"):
         return {}
     video_id = state["video_id"]
     _stage(video_id, "transcript")
     if state.get("kind") == "article":
         return _article(state)
+    if state.get("kind") == "media":
+        return _media(state)
     with ThreadPoolExecutor(1) as pool:  # title and channel arrive while the subtitles download
         meta = pool.submit(fetch_metadata, video_id)
         data = get_transcript(video_id)
@@ -201,7 +218,7 @@ def summarize_node(state: GraphState):
     video_id = state["video_id"]
     _stage(video_id, "summary")
     kind = state.get("kind", "youtube")
-    if kind == "youtube":
+    if kind in ("youtube", "media"):
         prompt = prompts.SUMMARY.format(transcript=to_timestamped_text(state["segments"]))
     else:
         prompt = prompts.SUMMARY_TEXT.format(what="статьи" if kind == "article" else "учебного материала",
@@ -273,9 +290,11 @@ def index_node(state: GraphState):
     if state.get("indexed") or not state.get("segments"):
         return {}
     video_id = state["video_id"]
-    link_for = sources.link_builder(state.get("kind", "youtube"), state.get("url"), state.get("anchors"))
+    kind = state.get("kind", "youtube")
+    link_for = sources.link_builder(kind, state.get("url"), state.get("anchors"))
+    time_link = sources.time_builder(kind, state.get("url"), video_id)
     try:
-        rag.index_video(video_id, state["segments"], link_for)
+        rag.index_video(video_id, state["segments"], link_for, time_link)
         repo.mark_indexed(video_id)
         return {"indexed": True}
     except Exception as e:  # noqa: BLE001

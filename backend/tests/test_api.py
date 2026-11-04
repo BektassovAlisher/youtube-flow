@@ -46,8 +46,7 @@ def test_new_video_returns_at_once_and_streams_progress(client, youtube, llm):
 
 
 @pytest.mark.parametrize("link, hint", [
-    ("просто слова", "Вставьте ссылку на видео YouTube или на статью"),
-    ("https://vimeo.com/123456", "Видео с vimeo.com пока не поддерживаются"),
+    ("просто слова", "Вставьте ссылку на видео, подкаст или статью"),
     ("https://www.youtube.com/playlist?list=PL1", "плейлист"),
     ("ftp://example.com/file", "http:// или https://"),
 ])
