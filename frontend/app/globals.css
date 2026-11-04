@@ -109,8 +109,15 @@ h1, h2, h3 { margin: 0; font-family: var(--display); font-weight: 700; letter-sp
 .nav a[aria-current="page"], .tab[aria-selected="true"] { color: var(--fg); }
 .nav a[aria-current="page"]::after, .tab[aria-selected="true"]::after { transform: scaleX(1); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.header-end { justify-self: end; display: flex; align-items: center; gap: 4px; }
+.signin {
+  font: 500 14px var(--font-sans), sans-serif; color: var(--muted); text-decoration: none; background: none; border: 0;
+  padding: 6px 10px; border-radius: 8px; cursor: pointer; transition: color 0.2s;
+}
+.signin:hover { color: var(--fg); }
+.signin-icon { display: none; width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .theme-toggle {
-  justify-self: end; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; cursor: pointer;
+  display: grid; place-items: center; width: 34px; height: 34px; padding: 0; cursor: pointer;
   border: 1px solid transparent; border-radius: 8px; background: none; color: var(--muted); transition: color 0.2s, border-color 0.2s;
 }
 .theme-toggle:hover { color: var(--fg); border-color: var(--line); }
@@ -129,12 +136,14 @@ h1, h2, h3 { margin: 0; font-family: var(--display); font-weight: 700; letter-sp
 @keyframes eq { 0%, 100% { transform: scaleY(0.25); } 50% { transform: scaleY(1); } }
 
 /* motion primitives */
-.rise { animation: rise 0.6s var(--ease) both; animation-delay: calc(var(--d, 0) * 90ms); }
+/* backwards, not both: a finished entrance must not leave a transform behind — it would make the element the
+   containing block of fixed children (the floating player) */
+.rise { animation: rise 0.6s var(--ease) backwards; animation-delay: calc(var(--d, 0) * 90ms); }
 @keyframes rise { from { opacity: 0; transform: translateY(18px); } }
 @supports (animation-timeline: view()) {
   .reveal { animation: rise linear both; animation-timeline: view(); animation-range: entry 0% entry 45%; }
 }
-.fade { animation: fade 0.45s var(--ease) both; }
+.fade { animation: fade 0.45s var(--ease) backwards; }
 @keyframes fade { from { opacity: 0; transform: translateY(8px); } }
 @keyframes blink { 50% { opacity: 0; } }
 
@@ -174,21 +183,24 @@ h1, h2, h3 { margin: 0; font-family: var(--display); font-weight: 700; letter-sp
 .ripple { position: absolute; left: var(--x); top: var(--y); width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: color-mix(in srgb, var(--bg) 45%, transparent); pointer-events: none; animation: ripple 0.7s var(--ease) forwards; }
 @keyframes ripple { from { transform: scale(0); opacity: 1; } to { transform: scale(30); opacity: 0; } }
 
-/* "Создать" while waiting (empty input / processing): a light streak orbits the button — white on dark, black on light */
-@property --angle { syntax: "<angle>"; initial-value: 0deg; inherits: true; }
+/* "Создать" while waiting (empty input / sending): a light streak orbits the button — white on dark, black on light.
+   The streak is a conic gradient on an oversized square that rotates inside the clipped ring, so every frame is a
+   compositor-only transform (animating a custom property inside the gradient cost a style recalc, a layout and a
+   paint per frame while the page sat idle). */
 .cta { position: relative; display: inline-flex; border-radius: 10px; padding: 1.5px; isolation: isolate; }
-.cta > .btn { flex: 1; border-radius: 8.5px; }
-.cta[data-waiting] {
-  --streak: conic-gradient(from var(--angle), transparent 0 50%, color-mix(in srgb, var(--fg) 30%, transparent) 72%, var(--fg) 90%, transparent 100%);
-  background: var(--streak), var(--line); animation: orbit 4.5s linear infinite;
+.cta > .btn { position: relative; z-index: 1; flex: 1; border-radius: 8.5px; }
+.cta-ring, .cta-glow { position: absolute; display: none; overflow: hidden; pointer-events: none; }
+.cta-ring { inset: 0; border-radius: 10px; background: var(--line); }
+.cta-glow { inset: -6px; z-index: -1; border-radius: 16px; filter: blur(12px); opacity: var(--glow); animation: breathe 4.5s ease-in-out infinite; }
+.cta-ring i, .cta-glow i {
+  position: absolute; left: 50%; top: 50%; width: 560px; height: 560px; margin: -280px 0 0 -280px;
+  background: conic-gradient(transparent 0 50%, color-mix(in srgb, var(--fg) 30%, transparent) 72%, var(--fg) 90%, transparent 100%);
+  animation: orbit 4.5s linear infinite;
 }
-.cta[data-waiting]::before {
-  content: ""; position: absolute; inset: -6px; z-index: -1; border-radius: 16px;
-  background: var(--streak); filter: blur(12px); opacity: var(--glow); animation: breathe 4.5s ease-in-out infinite;
-}
+.cta[data-waiting] .cta-ring, .cta[data-waiting] .cta-glow { display: block; }
 .cta[data-waiting] > .btn { background: var(--surface); border-color: transparent; color: var(--fg-2); }
-@keyframes orbit { to { --angle: 360deg; } }
-@keyframes breathe { 50% { opacity: calc(var(--glow) * 2); inset: -10px; } }
+@keyframes orbit { to { transform: rotate(360deg); } }
+@keyframes breathe { 50% { opacity: calc(var(--glow) * 2); transform: scale(1.06); } }
 .btn.small { height: 36px; padding: 0 14px; font-size: 14px; }
 .btn.danger:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
 
@@ -220,6 +232,24 @@ h1, h2, h3 { margin: 0; font-family: var(--display); font-weight: 700; letter-sp
 .notice h3 { font-size: 17px; margin-bottom: 6px; }
 .notice p { margin: 4px 0 0; color: var(--fg-2); }
 .error { color: var(--danger); margin-top: 12px; font-size: 14px; }
+.error a { color: inherit; font-weight: 600; }
+.notice-actions { margin-top: 14px; }
+.banner { margin: 28px 0 0; padding: 12px 16px; border: 1px solid var(--accent-40); border-radius: 10px; background: var(--accent-10); color: var(--fg-2); font-size: 15px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 32px; }
+.meter { height: 6px; margin-top: 14px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--accent); transition: width 0.4s var(--ease); }
+
+/* processing a new video: stages + the summary as it is being written */
+.progress { margin-top: 40px; }
+.progress .stages { margin-top: 0; }
+.live-summary { margin-top: 36px; padding-top: 28px; border-top: 1px solid var(--line); }
+.live-summary > .eyebrow { margin: 0 0 18px; }
+.live-caret { display: inline-block; width: 8px; height: 1.1em; margin-left: 2px; background: var(--accent); vertical-align: text-bottom; animation: blink 1s steps(1) infinite; }
+
+/* login */
+.login { display: grid; gap: 14px; max-width: 440px; margin: 40px auto 0; }
+.login .section-title { margin-bottom: 0; }
+.login p { margin: 0; }
 
 /* examples: finished summaries to open without waiting */
 .examples { margin-top: 40px; max-width: 900px; }
@@ -289,7 +319,13 @@ h1, h2, h3 { margin: 0; font-family: var(--display); font-weight: 700; letter-sp
   transition: transform 0.35s var(--ease), border-color 0.35s, box-shadow 0.35s;
 }
 .card:hover { transform: translateY(-4px); border-color: var(--line-2); box-shadow: 0 16px 40px var(--shadow-lg); }
-.card .media { overflow: hidden; border-bottom: 1px solid var(--line); }
+.card .media { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); }
+.badge {
+  position: absolute; left: 10px; top: 10px; padding: 3px 10px; border-radius: 999px; font: 600 12px/1.5 var(--font-sans), sans-serif;
+  color: var(--accent); background: color-mix(in srgb, var(--bg) 82%, transparent); border: 1px solid var(--accent-40);
+}
+.search .field { width: 320px; max-width: 100%; }
+.pager { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 36px; }
 .card .thumb { transition: transform 0.6s var(--ease), filter 0.6s; filter: saturate(0.85); }
 .card:hover .thumb { transform: scale(1.04); filter: saturate(1); }
 .card-body { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 12px; flex: 1; }
@@ -310,11 +346,33 @@ h1, h2, h3 { margin: 0; font-family: var(--display); font-weight: 700; letter-sp
 .vhead { display: grid; grid-template-columns: 1fr 340px; gap: 40px; align-items: center; }
 .vhead h1 { font-size: clamp(30px, 4.4vw, 46px); line-height: 1.05; letter-spacing: -0.03em; margin: 12px 0 24px; }
 .vhead .media { border-radius: 12px; overflow: hidden; border: 1px solid var(--line); }
+
+/* the video plays in the page; while playing it floats in a corner when scrolled out of view */
+.player-slot { aspect-ratio: 16 / 9; }
+.player { position: relative; width: 100%; height: 100%; background: #000; }
+.player iframe { display: block; width: 100%; height: 100%; border: 0; }
+.player[data-floating] {
+  position: fixed; right: 20px; bottom: 20px; z-index: 90; width: 360px; height: auto; aspect-ratio: 16 / 9;
+  border-radius: 12px; overflow: hidden; border: 1px solid var(--line-2); box-shadow: 0 16px 40px var(--shadow-lg);
+}
+.player-poster { display: block; position: relative; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: pointer; }
+.player-poster .thumb { height: 100%; }
+.play-btn {
+  position: absolute; left: 50%; top: 50%; display: grid; place-items: center; width: 58px; height: 58px; margin: -29px 0 0 -29px;
+  border-radius: 50%; background: color-mix(in srgb, var(--bg) 72%, transparent); border: 1px solid var(--line-2); color: var(--fg); font-size: 18px;
+  transition: transform 0.25s var(--ease);
+}
+.player-poster:hover .play-btn { transform: scale(1.08); }
+.player-close {
+  position: absolute; top: 6px; right: 6px; z-index: 2; width: 28px; height: 28px; border: 0; border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65); color: #fff; cursor: pointer; font-size: 13px;
+}
 .actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
 .tabs { display: flex; gap: 28px; margin-top: 56px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
 .tab { background: none; border: 0; padding: 14px 0; cursor: pointer; white-space: nowrap; }
 .panel { padding-top: 36px; }
+.panel[hidden] { display: none; }
 
 /* summary: text + sticky table of contents on the right */
 .summary { display: grid; grid-template-columns: minmax(0, 1fr) 230px; gap: 48px; align-items: start; }
@@ -413,6 +471,22 @@ audio { width: 100%; margin-bottom: 16px; }
   .recs { grid-template-columns: 1fr; gap: 36px; }
   .summary { grid-template-columns: 1fr; }
   .toc { display: none; } /* ponytail: no TOC on phones; add a collapsible one if long summaries get hard to navigate */
+  .player[data-floating] { left: 12px; right: 12px; bottom: 12px; width: auto; }
+  .search, .search .field { width: 100%; }
+}
+
+/* narrow phones: sign-in becomes an icon, so brand, nav and both buttons fit in one row */
+@media (max-width: 480px) {
+  .navbar { column-gap: 10px; padding: 0 6px 0 12px; }
+  .nav { gap: 14px; }
+  .signin { padding: 6px; }
+  .signin-text { display: none; }
+  .signin-icon { display: block; }
+}
+@media (max-width: 400px) {
+  .brand { font-size: 16px; gap: 8px; }
+  .nav { gap: 10px; }
+  .nav a { font-size: 14px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

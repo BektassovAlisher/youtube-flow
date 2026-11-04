@@ -1,3 +1,5 @@
+export type VideoStatus = "processing" | "ready" | "rejected" | "failed";
+
 export type VideoListItem = {
   video_id: string;
   title: string | null;
@@ -5,29 +7,38 @@ export type VideoListItem = {
   language: string | null;
   duration_sec: number | null;
   category: string | null;
+  channel: string | null;
+  status: VideoStatus;
   created_at: string | null;
 };
 
-export type VideoInfo = {
-  video_id: string;
-  title: string | null;
+export type Job = { kind: "process" | "audio"; status: "queued" | "running"; stage: string | null; done: number; total: number };
+export type Classification = { category: string; is_suitable: boolean; confidence: number; reason: string };
+export type Link = { title: string; url: string };
+export type Recs = { courses: Link[]; books: Link[]; from_cache?: boolean };
+export type Source = { timestamp: string; url: string };
+export type Answer = { answer: string; sources: Source[] };
+
+export type VideoInfo = VideoListItem & {
   summary: string;
   keywords: string[];
   podcast_script: string;
-  language: string;
-  category: string | null;
+  recommendation: Recs | null;
+  audio_ready: boolean;
+  stage: string | null;
+  error: string | null;
+  classification: Classification | null;
+  force: boolean;
+  indexed: boolean;
+  transcript_source: string | null;
+  jobs: Job[];
 };
 
-export type GenerateResult = {
-  video_id: string;
-  rejected: boolean;
-  video_category: string | null;
-  classification_reason: string | null;
-};
-
-export type Link = { title: string; url: string };
-export type Recs = { courses: Link[]; books: Link[]; from_cache: boolean };
-export type Answer = { answer: string; sources: { timestamp: string; url: string }[] };
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
 
 // Browser talks to /api/*, which app/api/[...path]/route.ts forwards to FastAPI.
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -38,8 +49,56 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function fail(res: Response): Promise<never> {
   const body = await res.json().catch(() => null);
-  throw new Error(typeof body?.detail === "string" ? body.detail : `Ошибка ${res.status}`);
+  const message = typeof body?.detail === "string" ? body.detail : `Ошибка ${res.status}`;
+  throw new ApiError(message, res.status);
 }
+
+// NDJSON stream: one JSON object per line
+export async function readNdjson(res: Response, onEvent: (event: any) => void) {
+  const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = "";
+  const emit = (line: string) => {
+    if (!line.trim()) return;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      return; // a broken line (proxy hiccup) is skipped, the next ones still arrive
+    }
+    onEvent(event); // errors thrown by the handler propagate to the caller
+  };
+  for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+    const lines = (buf + chunk.value).split("\n");
+    buf = lines.pop()!;
+    lines.forEach(emit);
+  }
+  emit(buf);
+}
+
+export type AnswerEvent =
+  | { type: "sources"; sources: Source[] }
+  | { type: "token"; text: string }
+  | { type: "done"; cached: boolean }
+  | { type: "error"; message: string };
+
+export async function askStream(id: string, question: string, history: { q: string; a: string }[], onEvent: (e: AnswerEvent) => void) {
+  const res = await fetch(`/api/videos/${id}/qa/stream`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ question, history }),
+  });
+  if (!res.ok || !res.body) await fail(res);
+  await readNdjson(res, onEvent);
+}
+
+// pipeline stages as the API reports them (job.stage)
+export const STAGES = [
+  ["transcript", "Получаю субтитры"],
+  ["classify", "Проверяю, что это обучающее видео"],
+  ["summary", "Пишу конспект"],
+  ["keywords", "Выделяю ключевые термины"],
+  ["script", "Пишу сценарий подкаста — редактор проверяет"],
+] as const;
 
 export const CATEGORY: Record<string, string> = {
   educational: "Образование",
@@ -67,4 +126,10 @@ export function linkTimestamps(md: string, videoId: string): string {
     const sec = c ? +a * 3600 + +b * 60 + +c : +a * 60 + +b;
     return `[${m.slice(1, -1)}](https://youtu.be/${videoId}?t=${sec})`;
   });
+}
+
+// seconds of a youtu.be/<id>?t=<sec> link to this very video, else null
+export function seekTarget(href: string | undefined, videoId: string): number | null {
+  const m = href?.match(/^https:\/\/youtu\.be\/([\w-]{11})\?t=(\d+)$/);
+  return m && m[1] === videoId ? +m[2] : null;
 }

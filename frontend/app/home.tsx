@@ -1,10 +1,11 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { CATEGORY, fail, minutes, thumb, type GenerateResult, type VideoListItem } from "@/lib/api";
+import { api, ApiError, CATEGORY, minutes, thumb, type VideoInfo, type VideoListItem } from "@/lib/api";
 import Eq from "./eq";
+import ErrorText from "./error-text";
 
 const TRANSCRIPT = [
   ["00:04", "Представьте, что вы видите цифру три"],
@@ -84,14 +85,6 @@ const STEPS = [
   },
 ];
 
-// stages shown while a new video is processed; each is done when its graph node finishes (/generate/stream)
-const STAGES = [
-  ["extract_transcript", "Получаю субтитры"],
-  ["classify", "Проверяю, что это обучающее видео"],
-  ["merge", "Пишу конспект и выделяю термины"],
-  ["save_to_db", "Пишу сценарий подкаста — редактор проверяет"],
-] as const;
-
 const d = (n: number) => ({ "--d": n }) as CSSProperties;
 
 // typewriter for the headline: uneven gaps between keystrokes (ms) read as a person typing;
@@ -105,59 +98,28 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
   const router = useRouter();
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [rejected, setRejected] = useState<GenerateResult | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [rejected, setRejected] = useState<VideoInfo | null>(null);
   const [ripple, setRipple] = useState<{ x: number; y: number; key: number } | null>(null);
-  const [stage, setStage] = useState(0); // how many STAGES are done
 
-
-  useEffect(() => {
-    if (!busy) return;
-    const start = Date.now();
-    const id = setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
-    return () => clearInterval(id);
-  }, [busy]);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  // the server answers at once (the work runs in the background); progress is shown on the video page
+  async function start(force = false) {
     setBusy(true);
-    setElapsed(0);
-    setStage(0);
     setError(null);
     setRejected(null);
     try {
-      const res = await fetch("/api/generate/stream", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ video_url: url.trim(), skip_audio: true }),
-      });
-      if (!res.ok || !res.body) await fail(res);
-      let result: GenerateResult | null = null;
-      let buf = "";
-      const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader();
-      for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
-        const lines = (buf + chunk.value).split("\n");
-        buf = lines.pop()!;
-        for (const line of lines.filter(Boolean)) {
-          const ev = JSON.parse(line);
-          if (ev.error) throw new Error(ev.error);
-          if (ev.result) result = ev.result;
-          const i = STAGES.findIndex(([node]) => node === ev.step);
-          if (i >= 0) setStage((s) => Math.max(s, i + 1));
-        }
+      const video = await api<VideoInfo>("videos", { method: "POST", body: JSON.stringify({ video_url: url.trim(), force }) });
+      if (video.status === "rejected") {
+        setRejected(video);
+        setBusy(false);
+      } else {
+        router.push(`/videos/${video.video_id}`);
       }
-      if (!result) throw new Error("Обработка прервалась, попробуйте ещё раз");
-      if (result.rejected) setRejected(result);
-      else router.push(`/videos/${result.video_id}`);
     } catch (err) {
-      setError((err as Error).message);
-    } finally {
+      setError(err as ApiError);
       setBusy(false);
     }
   }
-
-  const clock = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
 
   return (
     <>
@@ -182,10 +144,20 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
           видео. Русский, английский, казахский.
         </p>
 
-        <form className="form rise" style={d(2)} onSubmit={submit}>
+        <form
+          className="form rise"
+          style={d(2)}
+          onSubmit={(e) => {
+            e.preventDefault();
+            start();
+          }}
+        >
           <input
             className="field"
-            type="url"
+            type="text"
+            inputMode="url"
+            autoComplete="off"
+            spellCheck={false}
             required
             placeholder="Ссылка на видео с YouTube"
             aria-label="Ссылка на YouTube"
@@ -194,6 +166,12 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
             disabled={busy}
           />
           <span className="cta" data-waiting={busy || !url.trim() || undefined}>
+            <span className="cta-glow" aria-hidden>
+              <i />
+            </span>
+            <span className="cta-ring" aria-hidden>
+              <i />
+            </span>
             <button
               className="btn primary"
               disabled={busy || !url.trim()}
@@ -205,7 +183,7 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
               {ripple && <span key={ripple.key} className="ripple" style={{ "--x": `${ripple.x}px`, "--y": `${ripple.y}px` } as CSSProperties} />}
               {busy ? (
                 <>
-                  <Eq /> Обработка {clock}
+                  <Eq /> Отправляю…
                 </>
               ) : (
                 "Создать →"
@@ -214,25 +192,19 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
           </span>
         </form>
 
-        {busy && (
-          <ol className="stages fade" aria-live="polite">
-            {STAGES.map(([node, label], i) => (
-              <li key={node} data-state={i < stage ? "done" : i === stage ? "active" : undefined}>
-                <span className="stage-mark">{i < stage ? "✓" : i === stage ? <Eq /> : ""}</span>
-                {label}
-              </li>
-            ))}
-            <li className="stages-hint">Обычно это занимает от 30 секунд до пары минут — зависит от длины видео.</li>
-          </ol>
-        )}
-        {error && <p className="error fade">{error}</p>}
+        {error && <ErrorText error={error} />}
 
         {rejected && (
           <div className="notice fade" role="status">
-            <h3>Видео не подходит для обработки</h3>
-            <p>Категория: {CATEGORY[rejected.video_category ?? "unknown"] ?? rejected.video_category}</p>
-            {rejected.classification_reason && <p>{rejected.classification_reason}</p>}
-            <p className="muted">Выберите обучающее видео: лекцию, туториал или курс.</p>
+            <h3>Похоже, это не обучающее видео</h3>
+            <p>Категория: {CATEGORY[rejected.classification?.category ?? "unknown"] ?? rejected.classification?.category}</p>
+            {rejected.classification?.reason && <p>{rejected.classification.reason}</p>}
+            <p className="muted">Конспект лучше всего получается из лекций, уроков и разборов.</p>
+            <div className="actions notice-actions">
+              <button className="btn small" onClick={() => start(true)} disabled={busy}>
+                Всё равно обработать
+              </button>
+            </div>
           </div>
         )}
 

@@ -3,24 +3,43 @@ import type { CSSProperties } from "react";
 import { addedOn, CATEGORY, minutes, thumb, type VideoListItem } from "@/lib/api";
 import { serverApi } from "@/lib/server-api";
 
-export default async function LibraryPage() {
-  const videos = await serverApi<VideoListItem[]>("videos");
-  const error = videos ? null : "API недоступен";
+const PAGE = 24;
+
+export default async function LibraryPage({ searchParams }: PageProps<"/library">) {
+  const params = await searchParams;
+  const q = typeof params.q === "string" ? params.q.trim() : "";
+  const page = Math.max(1, Number(params.page) || 1);
+  const query = new URLSearchParams({ limit: String(PAGE), offset: String((page - 1) * PAGE), ...(q && { q }) });
+  const { data: videos, headers } = await serverApi<VideoListItem[]>(`videos?${query}`);
+  const total = Number(headers?.get("x-total-count") ?? videos?.length ?? 0);
+  const pages = Math.max(1, Math.ceil(total / PAGE));
+  const link = (p: number) => `/library?${new URLSearchParams({ ...(q && { q }), ...(p > 1 && { page: String(p) }) })}`;
 
   return (
     <>
       <div className="bar rise">
         <div>
-          {videos && <p className="eyebrow">{videos.length} видео</p>}
+          {videos && <p className="eyebrow">{q ? `Найдено: ${total}` : `${total} видео`}</p>}
           <h1 className="section-title">Библиотека</h1>
         </div>
+        <form className="search" action="/library">
+          <input className="field" type="search" name="q" defaultValue={q} placeholder="Поиск по названию или каналу" aria-label="Поиск" />
+        </form>
       </div>
 
-      {error && <p className="error">{error}</p>}
+      {!videos && <p className="error">Сервер API недоступен — библиотека появится, когда он запустится.</p>}
 
       {videos?.length === 0 && (
         <p className="empty fade">
-          Пока пусто. <Link href="/">Создайте первый конспект →</Link>
+          {q ? (
+            <>
+              Ничего не нашлось. <Link href="/library">Показать всё</Link>
+            </>
+          ) : (
+            <>
+              Пока пусто. <Link href="/">Создайте первый конспект →</Link>
+            </>
+          )}
         </p>
       )}
 
@@ -28,13 +47,15 @@ export default async function LibraryPage() {
         {videos?.map((v, i) => {
           const tags = [v.language?.toUpperCase(), minutes(v.duration_sec), CATEGORY[v.category ?? ""]].filter(Boolean);
           return (
-            <li key={v.video_id} className="rise" style={{ "--d": i } as CSSProperties}>
+            <li key={v.video_id} className="rise" style={{ "--d": Math.min(i, 12) } as CSSProperties}>
               <Link href={`/videos/${v.video_id}`} className="card">
                 <div className="media">
                   <img className="thumb" src={thumb(v.video_id)} alt="" loading="lazy" />
+                  {v.status === "processing" && <span className="badge">Обрабатывается</span>}
                 </div>
                 <div className="card-body">
                   <div className="card-title">{v.title ?? v.video_id}</div>
+                  {v.channel && <div className="date">{v.channel}</div>}
                   <div className="tags">
                     {tags.map((t) => (
                       <span key={t} className="tag">{t}</span>
@@ -50,6 +71,16 @@ export default async function LibraryPage() {
           );
         })}
       </ul>
+
+      {pages > 1 && (
+        <nav className="pager" aria-label="Страницы">
+          {page > 1 ? <Link className="btn small" href={link(page - 1)}>← Назад</Link> : <span />}
+          <span className="muted">
+            {page} из {pages}
+          </span>
+          {page < pages ? <Link className="btn small" href={link(page + 1)}>Дальше →</Link> : <span />}
+        </nav>
+      )}
     </>
   );
 }
