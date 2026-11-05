@@ -1,7 +1,7 @@
 """LLM clients and the LangGraph state.
 
-Gemini does all the text work; Groq is there for speech recognition (tools/whisper.py) and, with
-CHECKS_PROVIDER=groq, for the short checks. The clients are created on first use, so the API starts (and
+Gemini (config.GEMINI_MODEL) does all the text work; Groq is used only for speech recognition
+(tools/whisper.py). The clients are created on first use, so the API starts (and
 the library opens) even without the keys; a missing key becomes a readable error on the step that needs it.
 Tests replace these functions."""
 import operator
@@ -33,30 +33,6 @@ def gemini():
 def gemini_json():
     """The short checks, answered as JSON: whether the material is educational, key terms, script review."""
     return _gemini(response_mime_type="application/json")
-
-
-def checker(size: str = "large"):
-    """The model for the short checks. `size` picks between Groq's two models when CHECKS_PROVIDER=groq."""
-    if config.CHECKS_PROVIDER == "groq":
-        return groq_small() if size == "small" else groq_large()
-    return gemini_json()
-
-
-@lru_cache(maxsize=1)
-def groq_large():
-    from langchain_groq import ChatGroq
-
-    return ChatGroq(model=config.GROQ_MODEL_LARGE, temperature=0, api_key=require_env("GROQ_API_KEY"),
-                    request_timeout=60, max_retries=2)
-
-
-@lru_cache(maxsize=1)
-def groq_small():
-    from langchain_groq import ChatGroq
-
-    # temperature 0: the same video must not pass the check one time and fail it the next
-    return ChatGroq(model=config.GROQ_MODEL_SMALL, temperature=0, api_key=require_env("GROQ_API_KEY"),
-                    request_timeout=60, max_retries=2)
 
 
 class GraphState(TypedDict, total=False):

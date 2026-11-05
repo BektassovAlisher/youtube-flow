@@ -107,7 +107,7 @@ SEGMENTS = [
 @pytest.fixture
 def llm(monkeypatch):
     fake = FakeChat()
-    for name in ("gemini", "gemini_json", "groq_large", "groq_small"):
+    for name in ("gemini", "gemini_json"):
         monkeypatch.setattr(agent_state, name, lambda fake=fake: fake)
     return fake
 
