@@ -12,10 +12,15 @@ const NAV = [
 function toggleTheme() {
   // the pre-paint script in layout.tsx already set data-theme on <html>
   const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = next;
-  try {
-    localStorage.setItem("theme", next);
-  } catch {}
+  const apply = () => {
+    document.documentElement.dataset.theme = next;
+    try {
+      localStorage.setItem("theme", next);
+    } catch {}
+  };
+  // a short cross-fade, so the page changes colour instead of flashing
+  if (!document.startViewTransition || matchMedia("(prefers-reduced-motion: reduce)").matches) return apply();
+  document.startViewTransition(apply);
 }
 
 export default function Header({ auth }: { auth: "off" | "in" | "out" }) {

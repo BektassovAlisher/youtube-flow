@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
-import { Golos_Text, Literata } from "next/font/google";
+import { Geologica, Onest } from "next/font/google";
 import { cookies } from "next/headers";
 import { authRequired, SESSION_COOKIE, validSession } from "@/lib/session";
 import Header from "./header";
 import "./globals.css";
 
-// Reasons for both faces are in DESIGN.md: Literata is made for long reading and carries the material itself,
-// Golos Text was made for Russian-language interfaces and carries the app around it.
-const serif = Literata({ subsets: ["latin", "cyrillic"], style: ["normal", "italic"], axes: ["opsz"], variable: "--font-serif" });
-const sans = Golos_Text({ subsets: ["latin", "cyrillic"], variable: "--font-sans" });
+// Reasons for both faces are in DESIGN.md: Geologica (headings) was drawn with Cyrillic as a first-class script and
+// its sharpness axis gives titles a pen-like edge; Onest was made for Russian-language interfaces and long reading.
+const display = Geologica({ subsets: ["latin", "cyrillic"], axes: ["SHRP"], variable: "--font-display" });
+const sans = Onest({ subsets: ["latin", "cyrillic"], variable: "--font-sans" });
 
 // runs before first paint so the page never flashes the wrong theme: saved choice, else the OS preference
 const THEME_SCRIPT = `try{document.documentElement.dataset.theme=localStorage.getItem("theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch(e){}`;
@@ -22,7 +22,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   // "off": no APP_PASSWORD, nothing to sign in to
   const auth = !authRequired() ? "off" : validSession((await cookies()).get(SESSION_COOKIE)?.value) ? "in" : "out";
   return (
-    <html lang="ru" className={`${serif.variable} ${sans.variable}`} suppressHydrationWarning>
+    <html lang="ru" className={`${display.variable} ${sans.variable}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>

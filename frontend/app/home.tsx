@@ -69,7 +69,9 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
     <div className="home">
       <div>
         <section className="intro">
-          <h1>Конспект лекции, статьи или PDF</h1>
+          <h1>
+            <mark className="hl">Конспект</mark> лекции, статьи или PDF
+          </h1>
           <p className="lede">
             Вставьте ссылку на видео, подкаст или статью либо сам текст. Получится конспект с таймкодами, вопросы для
             самопроверки, подкаст на два голоса и ответы на вопросы по материалу.
