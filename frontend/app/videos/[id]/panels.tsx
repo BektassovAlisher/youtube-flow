@@ -82,7 +82,7 @@ export function Summary({ video, onRegenerate, busy, live = false }: { video: Vi
             <p>Содержание</p>
             {sections.map((t) => (
               <a key={t.id} href={`#${t.id}`}>
-                {t.ts && <span className="t">{t.ts}</span>}
+                {t.ts && <span className="t">{t.ts.replace("¶", "абз. ")}</span>}
                 {t.title}
               </a>
             ))}
@@ -122,7 +122,7 @@ function AnswerView({ a, material, live }: { a: Answer; material: Material; live
           <span>Фрагменты:</span>
           {a.sources.map((s, j) => (
             <TimestampLink key={j} href={s.url} material={material} className="ts">
-              {s.timestamp}
+              {s.timestamp.replace("¶", "абз. ")}
             </TimestampLink>
           ))}
         </div>
@@ -437,7 +437,7 @@ export function SourceText({ id, focus }: { id: string; focus: { n: number; key:
           <div key={p.n}>
             {p.section && p.section !== paragraphs[i - 1]?.section && <h2>{p.section}</h2>}
             <p id={`p${p.n}`}>
-              <span className="para-n">¶{p.n}</span>
+              <span className="para-n" title={`Абзац ${p.n}`}>{p.n}</span>
               {p.text}
             </p>
           </div>
