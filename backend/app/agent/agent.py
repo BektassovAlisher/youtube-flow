@@ -3,6 +3,7 @@ cut short (an error, a restart) resumes where it stopped instead of starting ove
 import json
 import logging
 import re
+import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
@@ -214,6 +215,14 @@ def start_pipeline_node(state: GraphState):
     return {}
 
 
+SUMMARY_PAUSES = (5, 15, 30)  # waits before the 2nd, 3rd and 4th attempt of a summary cut off by an overload
+_TRANSIENT = re.compile(r"\b(?:429|500|502|503|504)\b|unavailable|high demand|overloaded|resource.exhausted|deadline|timed out", re.I)
+
+
+def _transient(exc: BaseException) -> bool:
+    return bool(_TRANSIENT.search(f"{type(exc).__name__} {exc}"))
+
+
 def summarize_node(state: GraphState):
     if state.get("summary"):
         return {}
@@ -225,12 +234,24 @@ def summarize_node(state: GraphState):
     else:
         prompt = prompts.SUMMARY_TEXT.format(what="статьи" if kind == "article" else "учебного материала",
                                              text=sources.prompt_text(state["segments"]))
-    parts = []
-    for chunk in llm.gemini().stream(prompt):  # tokens go straight to the page that waits for the summary
-        text = chunk.text
-        if text:
-            parts.append(text)
-            _emit(token=text)
+    # The SDK retries a request that fails before the answer starts; an overload that breaks the stream midway
+    # ("503 UNAVAILABLE ... high demand") is retried here, and the page drops the half-written text first.
+    for attempt, pause in enumerate((*SUMMARY_PAUSES, None)):
+        parts = []
+        try:
+            for chunk in llm.gemini().stream(prompt):  # tokens go straight to the page that waits for the summary
+                text = chunk.text
+                if text:
+                    parts.append(text)
+                    _emit(token=text)
+            break
+        except Exception as e:  # noqa: BLE001 — only overloads and timeouts are retried, everything else is raised
+            if pause is None or not _transient(e):
+                raise
+            log.warning("%s: конспект прервался (%s), повтор %d через %d с", video_id, str(e)[:120], attempt + 1, pause)
+            if parts:
+                _emit(restart=True)
+            time.sleep(pause)
     summary = "".join(parts).strip()
     if not summary:
         raise UserError("Модель вернула пустой конспект. Попробуйте ещё раз.", status=503)

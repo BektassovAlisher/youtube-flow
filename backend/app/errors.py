@@ -47,6 +47,8 @@ def humanize(exc: BaseException) -> str:
     lowered = text.lower()
     if names & _RATE or status == 429 or re.search(r"\b429\b|resource.exhausted|rate.limit|quota", lowered):
         return "Сервис ИИ сейчас перегружен или исчерпан лимит запросов. Попробуйте через минуту."
+    if status in (500, 502, 503, 504) or re.search(r"\b50[0234]\b|unavailable|high demand|overloaded", lowered):
+        return "Модель Gemini сейчас перегружена. Нажмите «Попробовать ещё раз» через минуту: обработка продолжится с того же шага."
     if names & _AUTH or status in (401, 403):
         return "Внешний сервис отклонил API-ключ. Проверьте ключи в .env."
     if names & _CONTEXT:

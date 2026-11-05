@@ -56,6 +56,10 @@ export function useLive(id: string, initial: VideoInfo | null) {
           case "token":
             tokens.current += e.text;
             break;
+          case "restart": // the model was overloaded mid-way: the summary is written again from the start
+            tokens.current = "";
+            setPartial("");
+            break;
           case "saved":
           case "rejected":
             refresh();
