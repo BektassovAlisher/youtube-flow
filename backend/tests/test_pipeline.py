@@ -56,39 +56,26 @@ def test_classifier_sees_whole_video_and_keywords_come_from_summary(llm, youtube
     assert "Содержание раздела" not in prompts["keywords"]  # template labels are not terms
 
 
-def test_groq_models_are_deterministic():
-    agent_state.groq_small.cache_clear()
-    agent_state.groq_large.cache_clear()
-    # langchain-groq sends 0 as 1e-8 (the Groq API quirk), which is greedy decoding all the same
-    assert agent_state.groq_small().temperature < 1e-6
-    assert agent_state.groq_large().temperature < 1e-6
-
-
-def test_checks_go_to_gemini_unless_groq_is_chosen(monkeypatch):
-    for model in (agent_state.gemini, agent_state.gemini_json, agent_state.groq_small, agent_state.groq_large):
+def test_every_text_task_uses_the_configured_gemini_model():
+    for model in (agent_state.gemini, agent_state.gemini_json):
         model.cache_clear()
-    checker = agent_state.checker("small")
-    assert checker is agent_state.gemini_json() and checker.response_mime_type == "application/json"
-    writer = agent_state.gemini()
+    writer, checks = agent_state.gemini(), agent_state.gemini_json()
+    assert config.GEMINI_MODEL == "gemini-3.5-flash-lite"
+    assert writer.model.endswith("gemini-3.5-flash-lite") and checks.model.endswith("gemini-3.5-flash-lite")
+    assert checks.response_mime_type == "application/json"
     assert writer.response_mime_type is None and writer.max_retries == 6 and writer.temperature is None
-
-    monkeypatch.setattr(config, "CHECKS_PROVIDER", "groq")
-    assert agent_state.checker("small") is agent_state.groq_small()
-    assert agent_state.checker() is agent_state.groq_large()
+    assert not hasattr(agent_state, "groq_large") and not hasattr(agent_state, "checker")
 
 
 def test_model_settings_from_the_environment(monkeypatch):
     monkeypatch.setenv("GEMINI_MODEL", "")  # docker compose passes unset variables as empty strings
-    monkeypatch.setenv("CHECKS_PROVIDER", " Groq ")
     monkeypatch.setenv("GEMINI_THINKING_LEVEL", "fast")
     try:
         importlib.reload(config)
-        assert config.GEMINI_MODEL == "gemini-3.5-flash-lite"
-        assert config.CHECKS_PROVIDER == "groq" and config.GEMINI_THINKING_LEVEL is None
+        assert config.GEMINI_MODEL == "gemini-3.5-flash-lite" and config.GEMINI_THINKING_LEVEL is None
         monkeypatch.setenv("GEMINI_THINKING_LEVEL", "Low")
-        monkeypatch.setenv("CHECKS_PROVIDER", "openai")
         importlib.reload(config)
-        assert config.GEMINI_THINKING_LEVEL == "low" and config.CHECKS_PROVIDER == "gemini"
+        assert config.GEMINI_THINKING_LEVEL == "low"
         agent_state.gemini.cache_clear()
         assert agent_state.gemini().thinking_level == "low"
     finally:
@@ -97,15 +84,11 @@ def test_model_settings_from_the_environment(monkeypatch):
         agent_state.gemini.cache_clear()
 
 
-def test_critic_reads_the_whole_script_unless_groq_checks_it(llm, monkeypatch):
+def test_critic_reads_the_whole_script(llm):
     script = "Алекс: " + "очень длинная реплика про градиентный спуск. " * 400  # ~18,000 characters
     nodes.critic_node({"podcast_script": script, "keywords": ["градиентный спуск"]})
     kind, prompt = llm.calls[-1]
     assert kind == "critic" and "[текст обрезан]" not in prompt and prompt.count("очень длинная") == 400
-
-    monkeypatch.setattr(config, "CHECKS_PROVIDER", "groq")  # Groq's free tier counts tokens per minute
-    nodes.critic_node({"podcast_script": script, "keywords": ["градиентный спуск"]})
-    assert "[текст обрезан]" in llm.calls[-1][1]
 
 
 def test_json_answers_are_read_leniently():
