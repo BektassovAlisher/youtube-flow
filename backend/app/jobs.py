@@ -116,6 +116,9 @@ class Hub:
             if "progress" in event:
                 job.done, job.total = event["progress"]
                 out.append({"type": "job", **job.snapshot()})
+            if event.get("restart"):  # the summary stream broke and starts over: drop what was written
+                job.tokens.clear()
+                out.append({"type": "restart"})
             if "token" in event:
                 job.tokens.append(event["token"])
                 out.append({"type": "token", "text": event["token"]})
