@@ -238,8 +238,9 @@ def summarize_node(state: GraphState):
     # ("503 UNAVAILABLE ... high demand") is retried here, and the page drops the half-written text first.
     for attempt, pause in enumerate((*SUMMARY_PAUSES, None)):
         parts = []
+        model = llm.gemini() if attempt == 0 else llm.gemini_backup()  # later attempts go to the fallback model
         try:
-            for chunk in llm.gemini().stream(prompt):  # tokens go straight to the page that waits for the summary
+            for chunk in model.stream(prompt):  # tokens go straight to the page that waits for the summary
                 text = chunk.text
                 if text:
                     parts.append(text)
