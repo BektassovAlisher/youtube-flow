@@ -108,3 +108,27 @@ def test_summary_outline():
 def test_rrf_prefers_documents_found_by_both():
     a, b, c = (Document(page_content=t, metadata={"chunk_index": i}) for i, t in enumerate("abc"))
     assert rag.reciprocal_rank_fusion([[a, b], [b, c]], k=2)[0] is b
+
+
+@pytest.mark.parametrize("raw, clean", [
+    ("Привет! Отличный вопрос, который как раз бьет в самую суть нашего материала. Вес — это число.", "Вес — это число."),
+    ("Привет! Отличный вопрос. Давай разберемся с циклом ReAct.", "Давай разберемся с циклом ReAct."),
+    ("Здравствуйте! Хороший вопрос! Градиент показывает направление.", "Градиент показывает направление."),
+    ("Вес — это число. Отличный вопрос лектор задал в конце.", "Вес — это число. Отличный вопрос лектор задал в конце."),
+    ("Приветствие в начале лекции длится минуту.", "Приветствие в начале лекции длится минуту."),
+])
+def test_greeting_and_compliment_are_cut(raw, clean):
+    assert rag.strip_preamble(raw) == clean
+
+
+def test_greeting_is_cut_from_streamed_and_cached_answers(llm, monkeypatch):
+    seed_video(VID)
+    monkeypatch.setattr(llm, "_answer", lambda prompt: "Привет! Отличный вопрос. Вес — это число, на которое умножается вход [00:00].")
+    events = collect(VID, "Что такое вес?")
+    text = "".join(e["text"] for e in events if e["type"] == "token")
+    assert text.startswith("Вес — это число") and "Привет" not in text
+    assert not repo.get_answer(VID, rag.question_key("Что такое вес?"))["answer"].startswith("Привет")
+
+    repo.save_answer(VID, rag.question_key("Старый ответ?"), "Старый ответ?", "Привет! Хороший вопрос. Ответ.", [])
+    cached = collect(VID, "Старый ответ?")
+    assert "".join(e["text"] for e in cached if e["type"] == "token") == "Ответ."
