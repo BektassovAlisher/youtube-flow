@@ -139,28 +139,30 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
 
   return (
     <LocateContext.Provider value={locate}>
-      {back}
+      <div className="band cover">
+        {back}
 
-      <div className={media ? "vhead" : "vhead solo"}>
-        <div>
-          {meta && <p className="meta">{meta}</p>}
-          <h1>{video.title ?? id}</h1>
-          <div className="actions">
-            {kind === "youtube" && (
-              <a className="btn small" href={`https://www.youtube.com/watch?v=${id}`} target="_blank" rel="noreferrer">
-                Открыть на YouTube ↗
-              </a>
-            )}
-            {(kind === "article" || kind === "media") && (
-              <a className="btn small" href={video.url} target="_blank" rel="noreferrer">
-                {kind === "article" ? "Открыть статью ↗" : "Открыть оригинал ↗"}
-              </a>
-            )}
-            <button className="btn small danger" onClick={remove} disabled={jobs.length > 0}>Удалить</button>
+        <div className={media ? "vhead" : "vhead solo"}>
+          <div>
+            {meta && <p className="meta">{meta}</p>}
+            <h1>{video.title ?? id}</h1>
+            <div className="actions">
+              {kind === "youtube" && (
+                <a className="btn small" href={`https://www.youtube.com/watch?v=${id}`} target="_blank" rel="noreferrer">
+                  Открыть на YouTube ↗
+                </a>
+              )}
+              {(kind === "article" || kind === "media") && (
+                <a className="btn small" href={video.url} target="_blank" rel="noreferrer">
+                  {kind === "article" ? "Открыть статью ↗" : "Открыть оригинал ↗"}
+                </a>
+              )}
+              <button className="btn small danger" onClick={remove} disabled={jobs.length > 0}>Удалить</button>
+            </div>
+            {error && <ErrorText error={error} />}
           </div>
-          {error && <ErrorText error={error} />}
+          {media && <div className="media">{media}</div>}
         </div>
-        {media && <div className="media">{media}</div>}
       </div>
 
       {video.status === "rejected" ? (

@@ -19,7 +19,7 @@ export default async function LibraryPage({ searchParams }: PageProps<"/library"
 
   return (
     <>
-      <div className="lib-head">
+      <div className="band lib-head">
         <div>
           <h1>Библиотека</h1>
           {videos && <p className="meta">{q ? `По запросу «${q}»: ${count}` : count}</p>}

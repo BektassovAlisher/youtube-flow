@@ -66,116 +66,136 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
   );
 
   return (
-    <div className="home">
-      <div>
-        <section className="intro">
-          <h1>
-            <mark className="hl">Конспект</mark> лекции, статьи или PDF
-          </h1>
-          <p className="lede">
-            Вставьте ссылку на видео, подкаст или статью либо сам текст. Получится конспект с таймкодами, вопросы для
-            самопроверки, подкаст на два голоса и ответы на вопросы по материалу.
-          </p>
-        </section>
+    <>
+      <div className="band hero">
+        <div className="hero-grid">
+          <div>
+      <section className="intro">
+        <h1>
+          <mark className="hl">Конспект</mark> лекции, статьи или PDF
+        </h1>
+        <p className="lede">
+          Вставьте ссылку на видео, подкаст или статью либо сам текст. Получится конспект с таймкодами, вопросы для
+          самопроверки, подкаст на два голоса и ответы на вопросы по материалу.
+        </p>
+      </section>
 
-        <div className="composer">
-          <div className="mode" role="tablist" aria-label="Что добавить">
-            {(["link", "text"] as const).map((m) => (
-              <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setMode(m)} disabled={busy}>
-                {m === "link" ? "Ссылка" : "Текст или файл"}
-              </button>
-            ))}
-          </div>
-
-          <form
-            className="form-block"
-            onSubmit={(e) => {
-              e.preventDefault();
-              start();
-            }}
-          >
-            {mode === "link" ? (
-              <>
-                <label className="field-label" htmlFor="material-url">Ссылка на видео, подкаст или статью</label>
-                <div className="form">
-                  <input
-                    id="material-url"
-                    className="field"
-                    type="text"
-                    inputMode="url"
-                    autoComplete="off"
-                    spellCheck={false}
-                    required
-                    placeholder="https://"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    disabled={busy}
-                  />
-                  {submit}
-                </div>
-              </>
-            ) : (
-              <div className="text-fields">
-                <label className="field-label" htmlFor="material-title">Название, если нужно своё</label>
-                <input
-                  id="material-title"
-                  className="field"
-                  maxLength={300}
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  disabled={busy}
-                />
-                <label className="field-label" htmlFor="material-text">Текст статьи, главы, лекции или своих заметок</label>
-                <textarea
-                  id="material-text"
-                  className="field textarea"
-                  required
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  disabled={busy}
-                />
-                <div className="text-foot">
-                  <span className="muted num">
-                    {text.length < MIN_TEXT
-                      ? `Нужно хотя бы ${MIN_TEXT} символов, сейчас ${text.length}`
-                      : `${text.length.toLocaleString("ru-RU")} символов`}
-                  </span>
-                  <label className="btn small upload" aria-disabled={busy || undefined}>
-                    Загрузить файл: PDF, TXT или MD
-                    <input
-                      type="file"
-                      accept=".pdf,.txt,.md,.markdown,application/pdf,text/plain,text/markdown"
-                      disabled={busy}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        e.target.value = ""; // the same file can be picked again after an error
-                        if (file) start(false, file);
-                      }}
-                    />
-                  </label>
-                </div>
-                {submit}
-              </div>
-            )}
-          </form>
-
-          {error && <ErrorText error={error} />}
-
-          {rejected && (
-            <div className="notice" role="status">
-              <h3>{notEducational(rejected.kind)}</h3>
-              <p>Категория: {CATEGORY[rejected.classification?.category ?? "unknown"] ?? rejected.classification?.category}</p>
-              {rejected.classification?.reason && <p>{rejected.classification.reason}</p>}
-              <p className="muted">Конспект лучше всего получается из лекций, уроков, руководств и разборов.</p>
-              <div className="actions">
-                <button className="btn small" onClick={() => start(true)} disabled={busy}>
-                  Всё равно обработать
-                </button>
-              </div>
-            </div>
-          )}
+      <div className="composer">
+        <div className="mode" role="tablist" aria-label="Что добавить">
+          {(["link", "text"] as const).map((m) => (
+            <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => setMode(m)} disabled={busy}>
+              {m === "link" ? "Ссылка" : "Текст или файл"}
+            </button>
+          ))}
         </div>
 
+        <form
+          className="form-block"
+          onSubmit={(e) => {
+            e.preventDefault();
+            start();
+          }}
+        >
+          {mode === "link" ? (
+            <>
+              <label className="field-label" htmlFor="material-url">Ссылка на видео, подкаст или статью</label>
+              <div className="form">
+                <input
+                  id="material-url"
+                  className="field"
+                  type="text"
+                  inputMode="url"
+                  autoComplete="off"
+                  spellCheck={false}
+                  required
+                  placeholder="https://"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  disabled={busy}
+                />
+                {submit}
+              </div>
+            </>
+          ) : (
+            <div className="text-fields">
+              <label className="field-label" htmlFor="material-title">Название, если нужно своё</label>
+              <input
+                id="material-title"
+                className="field"
+                maxLength={300}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                disabled={busy}
+              />
+              <label className="field-label" htmlFor="material-text">Текст статьи, главы, лекции или своих заметок</label>
+              <textarea
+                id="material-text"
+                className="field textarea"
+                required
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                disabled={busy}
+              />
+              <div className="text-foot">
+                <span className="muted num">
+                  {text.length < MIN_TEXT
+                    ? `Нужно хотя бы ${MIN_TEXT} символов, сейчас ${text.length}`
+                    : `${text.length.toLocaleString("ru-RU")} символов`}
+                </span>
+                <label className="btn small upload" aria-disabled={busy || undefined}>
+                  Загрузить файл: PDF, TXT или MD
+                  <input
+                    type="file"
+                    accept=".pdf,.txt,.md,.markdown,application/pdf,text/plain,text/markdown"
+                    disabled={busy}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = ""; // the same file can be picked again after an error
+                      if (file) start(false, file);
+                    }}
+                  />
+                </label>
+              </div>
+              {submit}
+            </div>
+          )}
+        </form>
+
+        {error && <ErrorText error={error} />}
+
+        {rejected && (
+          <div className="notice" role="status">
+            <h3>{notEducational(rejected.kind)}</h3>
+            <p>Категория: {CATEGORY[rejected.classification?.category ?? "unknown"] ?? rejected.classification?.category}</p>
+            {rejected.classification?.reason && <p>{rejected.classification.reason}</p>}
+            <p className="muted">Конспект лучше всего получается из лекций, уроков, руководств и разборов.</p>
+            <div className="actions">
+              <button className="btn small" onClick={() => start(true)} disabled={busy}>
+                Всё равно обработать
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+          </div>
+        <aside className="margin" aria-labelledby="steps">
+            <h2 className="label" id="steps">Что будет после нажатия</h2>
+            <ol className="steps">
+              {STEPS.map(([name, text]) => (
+                <li key={name}>
+                  <span>
+                    <b>{name}</b> {text}
+                  </span>
+                </li>
+              ))}
+            </ol>
+            <p>Страницу можно закрыть: обработка идёт на сервере, а готовый материал появится в библиотеке.</p>
+          </aside>
+        </div>
+      </div>
+
+      <div className="home">
+        <div>
         {examples.length > 0 && (
           <section className="recent" aria-labelledby="recent">
             <div className="recent-head">
@@ -203,19 +223,7 @@ export default function Home({ examples }: { examples: VideoListItem[] }) {
         )}
       </div>
 
-      <aside className="margin" aria-labelledby="steps">
-        <h2 className="label" id="steps">Что будет после нажатия</h2>
-        <ol className="steps">
-          {STEPS.map(([name, text]) => (
-            <li key={name}>
-              <span>
-                <b>{name}</b> {text}
-              </span>
-            </li>
-          ))}
-        </ol>
-        <p>Страницу можно закрыть: обработка идёт на сервере, а готовый материал появится в библиотеке.</p>
-      </aside>
-    </div>
+      </div>
+    </>
   );
 }
