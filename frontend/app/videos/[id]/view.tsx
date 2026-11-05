@@ -8,7 +8,6 @@ import CoverImage from "../../cover-image";
 import Eq from "../../eq";
 import ErrorText from "../../error-text";
 import { useLive } from "./live";
-import Markdown from "./markdown";
 import { Audio, Questions, Quiz, Recommendations, Script, SourceText, splitQuiz, Summary } from "./panels";
 import { LocateContext, MediaPlayer, Player, type PlayAt } from "./player";
 
@@ -120,6 +119,9 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
   const processJob = jobs.find((j) => j.kind === "process");
   const audioJob = jobs.find((j) => j.kind === "audio");
   const quiz = splitQuiz(video.summary).questions;
+  // the summary is being streamed: show it in its final place instead of under the progress list
+  const live = !video.summary && !!partial && video.status !== "failed" && failure?.kind !== "process";
+  const shown: Tab = live ? "summary" : tab;
   const tabs = TABS.filter(([k]) => (k !== "quiz" || quiz.length > 0) && (k !== "text" || kind === "text"));
   const meta = [kind !== "youtube" && kindLabel(video), kind === "media" && siteOf(video.url), CATEGORY[video.category ?? ""], video.language?.toUpperCase(), video.channel, lengthLabel(video)]
     .filter((x, i, all) => x && x !== CATEGORY.unknown && all.indexOf(x) === i)
@@ -170,11 +172,10 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
             <button className="btn small" onClick={() => process(true)} disabled={busy}>Всё равно обработать</button>
           </div>
         </div>
-      ) : !video.summary ? (
+      ) : !video.summary && !live ? (
         <Progress
           kind={kind}
           job={processJob}
-          partial={partial}
           video={video}
           error={video.status === "failed" || failure?.kind === "process" ? (failure?.message ?? video.error) : null}
           stuck={!processJob && video.status === "processing"}
@@ -183,22 +184,27 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
         />
       ) : (
         <>
-          {processJob && processJob.stage !== "summary" && (
-            <p className="banner" role="status">
-              <Eq /> Конспект готов. Сценарий подкаста ещё пишется и появится во вкладке «Сценарий».
-            </p>
-          )}
+          {/* while the summary is written it already sits where the finished one will be: same tabs, same columns,
+              same margin for the timestamps. The status lives in the tab row, so it takes no height of its own and
+              nothing moves when it goes away. */}
           <div className="tabs" role="tablist" aria-label="Разделы материала">
             {tabs.map(([k, label]) => (
-              <button key={k} role="tab" className="tab" aria-selected={tab === k} onClick={() => open(k)}>
+              <button key={k} role="tab" className="tab" aria-selected={shown === k} disabled={live && k !== "summary"} onClick={() => open(k)}>
                 {label}
               </button>
             ))}
+            {processJob && (
+              <span className="tabs-status" role="status">
+                <Eq /> {live ? "Пишу конспект…" : "Пишу сценарий подкаста…"}
+              </span>
+            )}
           </div>
           {tabs.map(([k]) =>
-            visited.has(k) ? (
-              <section key={k} className="panel" role="tabpanel" hidden={tab !== k}>
-                {k === "summary" && <Summary video={video} busy={busy || !!processJob} onRegenerate={() => regenerate("summary")} />}
+            visited.has(k) || k === shown ? (
+              <section key={k} className="panel" role="tabpanel" hidden={shown !== k}>
+                {k === "summary" && (
+                  <Summary video={live ? { ...video, summary: partial } : video} live={live} busy={busy || !!processJob} onRegenerate={() => regenerate("summary")} />
+                )}
                 {k === "text" && <SourceText id={id} focus={focus} />}
                 {k === "quiz" && <Quiz material={video} questions={quiz} />}
                 {k === "script" && (
@@ -226,8 +232,8 @@ function Cover({ video }: { video: VideoInfo }) {
   );
 }
 
-function Progress({ kind, job, partial, video, error, stuck, busy, onResume }: {
-  kind: Kind; job?: Job; partial: string; video: VideoInfo; error: string | null; stuck: boolean; busy: boolean; onResume: () => void;
+function Progress({ kind, job, error, stuck, busy, onResume }: {
+  kind: Kind; job?: Job; video: VideoInfo; error: string | null; stuck: boolean; busy: boolean; onResume: () => void;
 }) {
   const stages = stagesFor(kind);
   const current = stages.findIndex(([key]) => key === job?.stage);
@@ -266,13 +272,6 @@ function Progress({ kind, job, partial, video, error, stuck, busy, onResume }: {
             </div>
           )}
         </>
-      )}
-      {partial && !error && (
-        <div className="live-summary">
-          <p className="meta">Конспект пишется прямо сейчас</p>
-          <Markdown text={partial} material={video} />
-          <span className="live-caret" aria-hidden />
-        </div>
       )}
     </section>
   );
