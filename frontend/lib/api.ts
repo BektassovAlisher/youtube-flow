@@ -230,7 +230,7 @@ export function linkLocators(md: string, m: Material): string {
   if (m.kind === "media")
     return md.replace(/\[(\d{1,2}):(\d{2})(?::(\d{2}))?\](?!\()/g, (x, a, b, c) =>
       `[${x.slice(1, -1)}](${timeUrl(m.url, c ? +a * 3600 + +b * 60 + +c : +a * 60 + +b)})`);
-  return md.replace(/\[¶(\d+)\](?!\()/g, (_, n) => `[¶${n}](${m.kind === "text" ? `#p${n}` : fragmentUrl(m.url, m.anchors?.[n])})`);
+  return md.replace(/\[¶(\d+)\](?!\()/g, (_, n) => `[абз. ${n}](${m.kind === "text" ? `#p${n}` : fragmentUrl(m.url, m.anchors?.[n])})`);
 }
 
 export const paragraphTarget = (href: string | undefined) => {
