@@ -26,6 +26,9 @@ def _bool(name: str, default: bool) -> bool:
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL") or "gemini-3.5-flash-lite"
+# takes over when the main model is overloaded ("503 high demand"); "none" turns the fallback off
+_FALLBACK = (os.getenv("GEMINI_FALLBACK_MODEL") or "gemini-3.1-flash-lite").strip()
+GEMINI_FALLBACK_MODEL = None if _FALLBACK.lower() in ("none", "off", "") or _FALLBACK == GEMINI_MODEL else _FALLBACK
 # how long Gemini 3 thinks before answering: minimal | low | medium | high; empty keeps the model's default
 _THINKING = (os.getenv("GEMINI_THINKING_LEVEL") or "").strip().lower()
 GEMINI_THINKING_LEVEL = _THINKING if _THINKING in ("minimal", "low", "medium", "high") else None
