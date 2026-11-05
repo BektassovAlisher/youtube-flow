@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { api, ApiError, askStream, type Answer, type Job, type Material, type Recs, type VideoInfo } from "@/lib/api";
 import Eq from "../../eq";
 import ErrorText from "../../error-text";
@@ -50,8 +50,8 @@ export function Summary({ video, onRegenerate, busy }: { video: VideoInfo; onReg
           <div className="terms">
             <p>Ключевые термины</p>
             <ul>
-              {video.keywords.map((k) => (
-                <li key={k}>{k}</li>
+              {video.keywords.map((k, i) => (
+                <li key={k} style={{ "--i": i } as CSSProperties}>{k}</li>
               ))}
             </ul>
           </div>
@@ -106,7 +106,7 @@ async function streamAnswer(id: string, q: string, history: { q: string; a: stri
 
 function AnswerView({ a, material, live }: { a: Answer; material: Material; live?: boolean }) {
   return (
-    <div>
+    <div className="answer">
       {a.answer ? <Markdown text={a.answer} material={material} /> : <p className="status"><Eq /> Ищу ответ…</p>}
       {live && a.answer && <span className="live-caret" aria-hidden />}
       {a.sources.length > 0 && (
