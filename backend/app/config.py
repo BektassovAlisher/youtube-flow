@@ -25,7 +25,7 @@ def _bool(name: str, default: bool) -> bool:
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL") or "gemini-3.5-flash-lite"
 # how long Gemini 3 thinks before answering: minimal | low | medium | high; empty keeps the model's default
 _THINKING = (os.getenv("GEMINI_THINKING_LEVEL") or "").strip().lower()
 GEMINI_THINKING_LEVEL = _THINKING if _THINKING in ("minimal", "low", "medium", "high") else None
