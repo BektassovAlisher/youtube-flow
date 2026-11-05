@@ -40,12 +40,33 @@ function download(name: string, text: string) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-export function Summary({ video, onRegenerate, busy }: { video: VideoInfo; onRegenerate: () => void; busy: boolean }) {
+// The same layout while the summary is streamed (`live`) and when it is saved: the text never moves.
+// Key terms come after the summary, so they live in the side column and cannot push the text down.
+export function Summary({ video, onRegenerate, busy, live = false }: { video: VideoInfo; onRegenerate: () => void; busy: boolean; live?: boolean }) {
   const { body } = splitQuiz(video.summary);
   const sections = toc(body);
   return (
     <div className="summary">
       <div className="notes">
+        <Markdown text={body} material={video} />
+        {live ? (
+          <span className="live-caret" aria-hidden />
+        ) : (
+          <div className="toolbar">
+            <button className="btn small" onClick={() => download(`${video.title ?? video.video_id}.md`, `# ${video.title ?? video.video_id}\n\n${video.summary}`)}>
+              Скачать конспект (.md)
+            </button>
+            <button
+              className="btn small"
+              disabled={busy}
+              onClick={() => confirm("Написать конспект заново? Термины, сценарий, аудио и сохранённые ответы тоже обновятся.") && onRegenerate()}
+            >
+              Пересоздать конспект
+            </button>
+          </div>
+        )}
+      </div>
+      <aside className="side">
         {video.keywords.length > 0 && (
           <div className="terms">
             <p>Ключевые термины</p>
@@ -56,31 +77,18 @@ export function Summary({ video, onRegenerate, busy }: { video: VideoInfo; onReg
             </ul>
           </div>
         )}
-        <Markdown text={body} material={video} />
-        <div className="toolbar">
-          <button className="btn small" onClick={() => download(`${video.title ?? video.video_id}.md`, `# ${video.title ?? video.video_id}\n\n${video.summary}`)}>
-            Скачать конспект (.md)
-          </button>
-          <button
-            className="btn small"
-            disabled={busy}
-            onClick={() => confirm("Написать конспект заново? Термины, сценарий, аудио и сохранённые ответы тоже обновятся.") && onRegenerate()}
-          >
-            Пересоздать конспект
-          </button>
-        </div>
-      </div>
-      {sections.length > 1 && (
-        <nav className="toc" aria-label="Содержание">
-          <p>Содержание</p>
-          {sections.map((t) => (
-            <a key={t.id} href={`#${t.id}`}>
-              {t.ts && <span className="t">{t.ts}</span>}
-              {t.title}
-            </a>
-          ))}
-        </nav>
-      )}
+        {sections.length > 1 && (
+          <nav className="toc" aria-label="Содержание">
+            <p>Содержание</p>
+            {sections.map((t) => (
+              <a key={t.id} href={`#${t.id}`}>
+                {t.ts && <span className="t">{t.ts}</span>}
+                {t.title}
+              </a>
+            ))}
+          </nav>
+        )}
+      </aside>
     </div>
   );
 }
