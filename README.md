@@ -133,7 +133,7 @@ START → load → transcript → classify ─┬─▶ reject → END          
 | Часть | Что используется |
 |---|---|
 | Оркестрация | LangGraph (StateGraph), потоковые события узлов |
-| Языковые модели | Google Gemini 3.1 Flash Lite для всех текстовых задач: конспект, сценарий, ответы, проверка материала, термины, критик (короткие проверки отвечают в JSON). С `CHECKS_PROVIDER=groq` проверки уходят в Groq `openai/gpt-oss-20b` и `gpt-oss-120b` |
+| Языковые модели | Google Gemini 3.5 Flash-Lite (`gemini-3.5-flash-lite`, стабильная версия с июля 2026) для всех текстовых задач: конспект, сценарий, ответы, проверка материала, термины, критик (короткие проверки отвечают в JSON). Модель меняется переменной `GEMINI_MODEL`. По желанию (`CHECKS_PROVIDER=groq`) короткие проверки можно отдать Groq `openai/gpt-oss-20b` и `gpt-oss-120b` |
 | Распознавание речи | Groq Whisper (`whisper-large-v3-turbo`), yt-dlp и ffmpeg |
 | Статьи и документы | trafilatura для страниц, pypdf для PDF по страницам; TXT и Markdown в любой кодировке |
 | Поиск по материалу | ChromaDB и `paraphrase-multilingual-MiniLM-L12-v2` через fastembed (ONNX, без PyTorch), BM25 со стеммингом Snowball, Reciprocal Rank Fusion |
@@ -275,7 +275,7 @@ cd backend && python -m pytest
 | `API_TOKEN` | Токен для POST и DELETE в API; интерфейс подставляет его сам | рекомендуется |
 | `APP_PASSWORD` | Пароль приложения для обработки, вопросов, аудио и удаления | нет |
 | `SESSION_SECRET` | Ключ подписи cookie (по умолчанию выводится из пароля) | нет |
-| `GEMINI_MODEL` | Модель Gemini (по умолчанию `gemini-3.1-flash-lite`) | нет |
+| `GEMINI_MODEL` | Модель Gemini (по умолчанию `gemini-3.5-flash-lite`; прежняя `gemini-3.1-flash-lite` тоже работает) | нет |
 | `GEMINI_THINKING_LEVEL` | Сколько модель думает перед ответом: `minimal`, `low`, `medium`, `high` | нет |
 | `CHECKS_PROVIDER` | Кто проверяет материал, выбирает термины и критикует сценарий: `gemini` (по умолчанию) или `groq` | нет |
 | `WHISPER_FALLBACK` | Распознавать речь у записей без субтитров (по умолчанию `true`) | нет |

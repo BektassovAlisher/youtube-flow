@@ -83,7 +83,7 @@ def test_model_settings_from_the_environment(monkeypatch):
     monkeypatch.setenv("GEMINI_THINKING_LEVEL", "fast")
     try:
         importlib.reload(config)
-        assert config.GEMINI_MODEL == "gemini-3.1-flash-lite"
+        assert config.GEMINI_MODEL == "gemini-3.5-flash-lite"
         assert config.CHECKS_PROVIDER == "groq" and config.GEMINI_THINKING_LEVEL is None
         monkeypatch.setenv("GEMINI_THINKING_LEVEL", "Low")
         monkeypatch.setenv("CHECKS_PROVIDER", "openai")
