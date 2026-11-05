@@ -275,9 +275,29 @@ QA_PROMPT = """Ты — преподаватель, который отличн�
 - Если в материале этого нет — скажи прямо, затем коротко ответь из общих знаний, без ссылок на места.
 - Обзор → структура и 3–5 главных идей. Сравнение → плюсы и минусы и вывод автора. «Как сделать» → шаги и \
 предупреждения автора. «Что такое» → простое объяснение с аналогией.
-- Стиль живой и дружелюбный, не энциклопедический. 2–5 абзацев, короче — если вопрос простой.
+- Начинай сразу с ответа по существу. Без приветствий, без «Отличный вопрос», без пересказа вопроса и без обращения к слушателю.
+- Объясняй просто и ясно, не энциклопедически. 2–5 абзацев, короче — если вопрос простой.
 - Английские технические термины оставляй на английском. Отвечай на языке вопроса.
 """
+
+# Models still open with "Привет! Отличный вопрос…" now and then, and answers saved before the prompt said
+# otherwise have it too: such an opening is cut from new and from cached answers alike.
+_PREAMBLE = re.compile(
+    r"^\s*(?:(?:привет|здравствуй(?:те)?|добрый\s+(?:день|вечер)|доброе\s+утро|hi|hello)\b[^.!?\n]*[.!?]+\s*"
+    r"|(?:(?:это\s+)?(?:отличный|хороший|прекрасный|интересный|замечательный|классный|важный|правильный)\s+вопрос"
+    r"|great\s+question|good\s+question)\b[^.!?\n]*[.!?]+\s*)",
+    re.IGNORECASE,
+)
+
+
+def strip_preamble(text: str) -> str:
+    """Cuts a greeting and a compliment to the question from the start of an answer."""
+    while True:
+        cut = _PREAMBLE.sub("", text, count=1)
+        if cut == text:
+            return text
+        text = cut
+
 
 PROMPT_PARTS = {
     "youtube": {"material": "это видео", "fragments": "ТРАНСКРИПТА",
@@ -343,7 +363,7 @@ async def answer_events(video_id: str, question: str, history: list[dict] | None
         cached = await asyncio.to_thread(repo.get_answer, video_id, key)
         if cached:
             yield {"type": "sources", "sources": cached["sources"]}
-            yield {"type": "token", "text": cached["answer"]}
+            yield {"type": "token", "text": strip_preamble(cached["answer"])}
             yield {"type": "done", "cached": True}
             return
     if charge:
@@ -361,12 +381,24 @@ async def answer_events(video_id: str, question: str, history: list[dict] | None
                               outline=summary_outline(video["summary"]), context=_context(docs),
                               history=_history(history), question=q)
     parts, started, first = [], time.monotonic(), None
+    head, opened = "", False  # the first sentences wait until a possible greeting can be cut off
     async for chunk in llm.gemini().astream(prompt):
         text = chunk.text
-        if text:
-            first = first or time.monotonic() - started
-            parts.append(text)
-            yield {"type": "token", "text": text}
+        if not text:
+            continue
+        first = first or time.monotonic() - started
+        if not opened:
+            head += text
+            if len(head) < 160 and not re.search(r"[.!?]\s+\S[^.!?]*[.!?]", head):
+                continue
+            text, opened = strip_preamble(head), True
+            if not text:
+                continue
+        parts.append(text)
+        yield {"type": "token", "text": text}
+    if not opened and head:
+        parts.append(strip_preamble(head))
+        yield {"type": "token", "text": parts[-1]}
     answer = "".join(parts).strip()
     if not answer:
         raise UserError("Модель не вернула ответ. Попробуйте ещё раз.", status=503)
