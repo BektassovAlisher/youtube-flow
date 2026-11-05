@@ -191,3 +191,46 @@ def test_transcript_error_is_reported(llm, youtube, monkeypatch):
                      "message": "Видео недоступно: оно удалено, скрыто или в ссылке ошибка."}
     video = repo.get_video(VID)
     assert video["status"] == "failed" and video["error"].startswith("Видео недоступно")
+
+
+class Overloaded(Exception):
+    pass
+
+
+def test_overloaded_summary_is_retried_and_the_page_starts_over(llm, youtube, monkeypatch):
+    monkeypatch.setattr(nodes.time, "sleep", lambda s: None)
+    real = llm.stream
+    calls = {"n": 0}
+
+    def stream(prompt):  # the first stream breaks after a few chunks, like Gemini's "503 high demand"
+        if llm._kind(str(prompt)) == "summary" and calls["n"] == 0:
+            calls["n"] += 1
+            yield from list(real(prompt))[:3]
+            raise Overloaded("503 UNAVAILABLE. This model is currently experiencing high demand.")
+        yield from real(prompt)
+
+    monkeypatch.setattr(llm, "stream", stream)
+    events = []
+    original = jobs.hub.emit
+    jobs.hub.emit = lambda job, event: (events.append(event), original(job, event))[1]
+    try:
+        final, _ = run()
+    finally:
+        jobs.hub.emit = original
+    assert final == {"type": "done", "kind": "process"}
+    assert repo.get_video(VID)["summary"].startswith("## Обзор лекции")
+    assert any(e.get("restart") for e in events)
+    after = events[[i for i, e in enumerate(events) if e.get("restart")][0] + 1:]
+    assert "".join(e["token"] for e in after if "token" in e).strip() == repo.get_video(VID)["summary"]
+
+
+def test_not_overloaded_errors_are_not_retried(llm, youtube, monkeypatch):
+    monkeypatch.setattr(nodes.time, "sleep", lambda s: None)
+    llm.fail["summary"] = ValueError("bad request")
+    final, _ = run()
+    assert final["type"] == "error" and final["stage"] == "summary"
+
+
+def test_overload_message_is_clear():
+    from errors import humanize
+    assert "перегружена" in humanize(Overloaded("503 UNAVAILABLE. high demand"))
