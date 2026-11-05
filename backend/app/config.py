@@ -25,15 +25,10 @@ def _bool(name: str, default: bool) -> bool:
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL") or "gemini-3.1-flash-lite"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL") or "gemini-3.5-flash-lite"
 # how long Gemini 3 thinks before answering: minimal | low | medium | high; empty keeps the model's default
 _THINKING = (os.getenv("GEMINI_THINKING_LEVEL") or "").strip().lower()
 GEMINI_THINKING_LEVEL = _THINKING if _THINKING in ("minimal", "low", "medium", "high") else None
-# the short checks (is the material educational, key terms, podcast script review): gemini by default,
-# groq to send them to Groq's gpt-oss models and spend fewer Gemini requests
-CHECKS_PROVIDER = "groq" if (os.getenv("CHECKS_PROVIDER") or "").strip().lower() == "groq" else "gemini"
-GROQ_MODEL_LARGE = os.getenv("GROQ_MODEL_LARGE") or "openai/gpt-oss-120b"
-GROQ_MODEL_SMALL = os.getenv("GROQ_MODEL_SMALL") or "openai/gpt-oss-20b"
 WHISPER_MODEL = os.getenv("WHISPER_MODEL") or "whisper-large-v3-turbo"
 
 # same model as before (sentence-transformers), served through ONNX by fastembed: no torch needed
