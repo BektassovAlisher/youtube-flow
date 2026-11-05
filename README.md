@@ -133,7 +133,7 @@ START → load → transcript → classify ─┬─▶ reject → END          
 | Часть | Что используется |
 |---|---|
 | Оркестрация | LangGraph (StateGraph), потоковые события узлов |
-| Языковые модели | Google Gemini 3.5 Flash-Lite (`gemini-3.5-flash-lite`, стабильная версия с июля 2026) для всех текстовых задач: конспект, сценарий, ответы, проверка материала, термины, критик (короткие проверки отвечают в JSON). Модель меняется переменной `GEMINI_MODEL` |
+| Языковые модели | Google Gemini 3.5 Flash-Lite (`gemini-3.5-flash-lite`, стабильная версия с июля 2026) для всех текстовых задач: конспект, сценарий, ответы, проверка материала, термины, критик (короткие проверки отвечают в JSON). Если она перегружена, запрос сам уходит в запасную Gemini 3.1 Flash-Lite. Модели меняются переменными `GEMINI_MODEL` и `GEMINI_FALLBACK_MODEL` |
 | Распознавание речи | Groq Whisper (`whisper-large-v3-turbo`), yt-dlp и ffmpeg |
 | Статьи и документы | trafilatura для страниц, pypdf для PDF по страницам; TXT и Markdown в любой кодировке |
 | Поиск по материалу | ChromaDB и `paraphrase-multilingual-MiniLM-L12-v2` через fastembed (ONNX, без PyTorch), BM25 со стеммингом Snowball, Reciprocal Rank Fusion |
@@ -276,6 +276,7 @@ cd backend && python -m pytest
 | `APP_PASSWORD` | Пароль приложения для обработки, вопросов, аудио и удаления | нет |
 | `SESSION_SECRET` | Ключ подписи cookie (по умолчанию выводится из пароля) | нет |
 | `GEMINI_MODEL` | Модель Gemini (по умолчанию `gemini-3.5-flash-lite`) | нет |
+| `GEMINI_FALLBACK_MODEL` | Запасная модель, когда основная перегружена (по умолчанию `gemini-3.1-flash-lite`; `none` отключает) | нет |
 | `GEMINI_THINKING_LEVEL` | Сколько модель думает перед ответом: `minimal`, `low`, `medium`, `high` | нет |
 | `WHISPER_FALLBACK` | Распознавать речь у записей без субтитров (по умолчанию `true`) | нет |
 | `WHISPER_MAX_MINUTES` | Максимальная длина записи для распознавания (по умолчанию 180; на бесплатном плане Groq лучше 120) | нет |

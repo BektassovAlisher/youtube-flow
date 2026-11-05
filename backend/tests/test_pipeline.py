@@ -56,15 +56,34 @@ def test_classifier_sees_whole_video_and_keywords_come_from_summary(llm, youtube
     assert "Содержание раздела" not in prompts["keywords"]  # template labels are not terms
 
 
-def test_every_text_task_uses_the_configured_gemini_model():
-    for model in (agent_state.gemini, agent_state.gemini_json):
+def test_every_text_task_uses_gemini_3_5_with_3_1_behind_it():
+    for model in (agent_state.gemini, agent_state.gemini_json, agent_state.gemini_backup):
         model.cache_clear()
     writer, checks = agent_state.gemini(), agent_state.gemini_json()
-    assert config.GEMINI_MODEL == "gemini-3.5-flash-lite"
-    assert writer.model.endswith("gemini-3.5-flash-lite") and checks.model.endswith("gemini-3.5-flash-lite")
-    assert checks.response_mime_type == "application/json"
-    assert writer.response_mime_type is None and writer.max_retries == 6 and writer.temperature is None
+    assert config.GEMINI_MODEL == "gemini-3.5-flash-lite" and config.GEMINI_FALLBACK_MODEL == "gemini-3.1-flash-lite"
+    for chain in (writer, checks):
+        assert chain.runnable.model.endswith("gemini-3.5-flash-lite") and chain.runnable.max_retries == 2
+        assert chain.fallbacks[0].model.endswith("gemini-3.1-flash-lite") and chain.fallbacks[0].max_retries == 6
+    assert checks.runnable.response_mime_type == checks.fallbacks[0].response_mime_type == "application/json"
+    assert writer.runnable.response_mime_type is None and writer.runnable.temperature is None
+    assert agent_state.gemini_backup().model.endswith("gemini-3.1-flash-lite")
     assert not hasattr(agent_state, "groq_large") and not hasattr(agent_state, "checker")
+
+
+def test_fallback_can_be_turned_off(monkeypatch):
+    monkeypatch.setenv("GEMINI_FALLBACK_MODEL", "none")
+    try:
+        importlib.reload(config)
+        agent_state.gemini.cache_clear()
+        agent_state.gemini_backup.cache_clear()
+        assert config.GEMINI_FALLBACK_MODEL is None
+        assert agent_state.gemini().model.endswith("gemini-3.5-flash-lite") and agent_state.gemini().max_retries == 6
+        assert agent_state.gemini_backup().model.endswith("gemini-3.5-flash-lite")
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)
+        agent_state.gemini.cache_clear()
+        agent_state.gemini_backup.cache_clear()
 
 
 def test_model_settings_from_the_environment(monkeypatch):
@@ -77,7 +96,8 @@ def test_model_settings_from_the_environment(monkeypatch):
         importlib.reload(config)
         assert config.GEMINI_THINKING_LEVEL == "low"
         agent_state.gemini.cache_clear()
-        assert agent_state.gemini().thinking_level == "low"
+        assert agent_state.gemini().runnable.thinking_level == "low"
+        assert agent_state.gemini().fallbacks[0].thinking_level == "low"
     finally:
         monkeypatch.undo()
         importlib.reload(config)
