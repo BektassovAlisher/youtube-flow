@@ -421,6 +421,45 @@ button:disabled, [aria-disabled="true"], .upload[aria-disabled] { cursor: not-al
 .stages li[data-state="done"] .stage-mark { animation: tick 0.35s var(--ease-out) backwards; }
 .btn:active:not(:disabled) { transform: translateY(1px); }
 
+/* ---- outlined blocks: the page stays paper; what you work with lies on it as a sheet with a pencil outline ---- */
+:root { --box-bg: var(--paper-raised); --box-line: var(--rule-2); }
+.composer, .margin, .recent, .vhead, .notes, .terms, .toc, .rows:not(.compact), .quiz-list, .dialogue, .block {
+  background: var(--box-bg); border: 1px solid var(--box-line); border-radius: 8px;
+}
+.composer { padding: 20px 22px 22px; }
+.margin { padding: 20px 22px; border-left-width: 1px; }
+.recent { margin-top: 40px; padding: 18px 22px 6px; }
+.recent .rows { border-top: 1px solid var(--rule); }
+.recent .rows li:last-child { border-bottom: 0; }
+.vhead { padding: 24px; }
+.vhead h1 { margin-bottom: 20px; }
+/* the summary is a sheet; its left margin holds the section timestamps */
+.notes { padding: 36px 40px 40px 104px; }
+.terms, .toc { padding: 14px 16px; }
+.toc { border-left: 1px solid var(--box-line); }
+.rows:not(.compact) { padding: 0 20px; }
+.rows:not(.compact) li:last-child { border-bottom: 0; }
+.rows:not(.compact) .row { margin: 0 -12px; padding: 14px 12px; }
+.quiz-list { padding: 0 24px; }
+.quiz-list .quiz-item:last-child { border-bottom: 0; }
+.dialogue { padding: 24px 28px; }
+.block { padding: 20px 22px; }
+.chat .form-block { padding: 18px 20px; background: var(--box-bg); border: 1px solid var(--box-line); border-radius: 8px; }
+.qa:first-of-type { padding-top: 0; }
+@media (max-width: 760px) {
+  .composer, .margin, .recent, .vhead, .block { padding-left: 16px; padding-right: 16px; }
+  .notes { padding: 22px 18px 26px; }
+  .dialogue { padding: 18px; }
+  .quiz-list, .rows:not(.compact) { padding: 0 16px; }
+}
+
+/* the narrowest phones (320px): brand, menu and the theme button still fit in one row */
+@media (max-width: 360px) {
+  .navbar, .nav { gap: 10px; }
+  .nav a { font-size: 14px; }
+  .brand { font-size: 18px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
