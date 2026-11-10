@@ -83,6 +83,25 @@ def fetch_metadata(video_id: str, timeout: float = 5) -> dict:
     return {"title": None, "channel": None}
 
 
+_GENRE = re.compile(r'<meta itemprop="genre" content="([^"]+)"|"category":"([^"]+)"')
+
+
+def fetch_category(video_id: str, timeout: float = 5) -> str | None:
+    """The category the author picked on YouTube ("Education", "Music", ...), from the watch page.
+    None when the page is unavailable: the check then simply asks the model."""
+    try:
+        r = requests.get(watch_url(video_id), timeout=timeout, proxies=_proxies(),
+                         headers={"Accept-Language": "en-US,en;q=0.8"},
+                         cookies={"CONSENT": "YES+1", "SOCS": "CAI"})  # skips the EU cookie consent page
+        if r.ok:
+            m = _GENRE.search(r.text)
+            if m:
+                return html.unescape(m.group(1) or m.group(2)).strip() or None
+    except requests.RequestException as e:
+        log.info("категория %s недоступна: %s", video_id, e)
+    return None
+
+
 class NoSubtitles(Exception):
     """The video has no subtitles at all: the caller may fall back to speech recognition."""
 
