@@ -53,6 +53,7 @@ def test_article_pipeline(client, llm, youtube, article):
     assert "Сайт: Хабр" in prompts["classify"] and "веб-страница" in prompts["classify"]
     assert "текст статьи" in prompts["summary"] and "[¶2] Представьте" in prompts["summary"]
     assert "## Формула и шаг обучения" in prompts["summary"]  # the original's sections are kept
+    assert "Число разделов: около 2" in prompts["summary"]  # a short article: by the number of words
     assert llm.kinds() == ["classify", "summary", "keywords"]
 
 

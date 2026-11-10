@@ -247,6 +247,12 @@ def _transient(exc: BaseException) -> bool:
     return bool(_TRANSIENT.search(f"{type(exc).__name__} {exc}"))
 
 
+def section_count(estimate: float) -> int:
+    """How many sections the summary asks for: one per 5-7 minutes or ~800 words. Without a number the model
+    wrote 3 sections for an hour-long lecture and lost most of the details."""
+    return max(2, min(25, round(estimate)))
+
+
 def summarize_node(state: GraphState):
     if state.get("summary"):
         return {}
@@ -254,10 +260,14 @@ def summarize_node(state: GraphState):
     _stage(video_id, "summary")
     kind = state.get("kind", "youtube")
     if kind in ("youtube", "media"):
-        prompt = prompts.SUMMARY.format(transcript=to_timestamped_text(state["segments"]))
+        minutes = round(duration_of(state["segments"]) / 60)
+        prompt = prompts.SUMMARY.format(transcript=to_timestamped_text(state["segments"]), minutes=minutes,
+                                        sections=section_count(minutes / 6))
     else:
+        words = word_count(state["segments"])
         prompt = prompts.SUMMARY_TEXT.format(what="статьи" if kind == "article" else "учебного материала",
-                                             text=sources.prompt_text(state["segments"]))
+                                             text=sources.prompt_text(state["segments"]), words=words,
+                                             sections=section_count(words / 800))
     # The SDK retries a request that fails before the answer starts; an overload that breaks the stream midway
     # ("503 UNAVAILABLE ... high demand") is retried here, and the page drops the half-written text first.
     started = time.monotonic()
