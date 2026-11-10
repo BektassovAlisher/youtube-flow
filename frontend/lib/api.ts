@@ -112,11 +112,10 @@ export async function askStream(id: string, question: string, history: { q: stri
   await readNdjson(res, onEvent);
 }
 
-// pipeline stages as the API reports them (job.stage); pasted text skips the check
+// pipeline stages as the API reports them (job.stage); the check runs alongside the summary, so it has no line here
 export function stagesFor(kind: Kind): [string, string][] {
   return [
     ["transcript", { youtube: "Получаю субтитры", media: "Получаю субтитры или распознаю речь", article: "Загружаю статью", text: "Разбираю текст" }[kind]],
-    ...(kind === "text" ? [] : ([["classify", kind === "article" ? "Проверяю, что это учебный материал" : "Проверяю, что это обучающая запись"]] as [string, string][])),
     ["summary", "Пишу конспект"],
     ["keywords", "Выделяю ключевые термины"],
     ["script", "Пишу сценарий подкаста, редактор его проверяет"],
