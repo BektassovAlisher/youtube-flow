@@ -60,6 +60,7 @@ class GraphState(TypedDict, total=False):
     channel: str | None
     language: str
     segments: list[dict]  # video: [{start, duration, text}]; text materials: [{n, section, text}]
+    youtube_category: str | None  # the category on YouTube, when the watch page gave it
     classification: dict
     rejected: bool
     summary: str

@@ -19,12 +19,14 @@ from tools import sources
 from tools.chunking_transcript import plain_text, to_timestamped_text
 from tools.media import fetch_media
 from tools.text_sources import fetch_article, word_count
-from tools.youtube_scraper import duration_of, fetch_metadata, get_transcript
+from tools.youtube_scraper import duration_of, fetch_category, fetch_metadata, get_transcript
 
 log = logging.getLogger(__name__)
 
 HOSTS = ("Алекс", "Марина")
 CATEGORIES = {"educational", "entertainment", "news", "random", "music", "gaming", "advertising"}
+# YouTube categories that answer the check by themselves; any other category goes to the model as a hint
+EDUCATIONAL_ON_YOUTUBE = {"Education": "Образование", "Science & Technology": "Наука и техника"}
 GEMINI_CHAR_LIMIT = 60000  # Gemini reads a whole podcast script
 TEMPLATE_LABELS = {"содержание раздела", "ключевые понятия и определения", "важные идеи и факты",
                    "примеры и иллюстрации", "связи с другими темами"}
@@ -138,10 +140,11 @@ def transcript_node(state: GraphState):
         return _article(state)
     if state.get("kind") == "media":
         return _media(state)
-    with ThreadPoolExecutor(1) as pool:  # title and channel arrive while the subtitles download
+    with ThreadPoolExecutor(2) as pool:  # title, channel and category arrive while the subtitles download
         meta = pool.submit(fetch_metadata, video_id)
+        category = pool.submit(fetch_category, video_id)
         data = get_transcript(video_id)
-        meta = meta.result()
+        meta, category = meta.result(), category.result()
     segments = data["segments"]
     title = data.get("title") or meta["title"] or state.get("title") or f"Видео {video_id}"
     channel = data.get("channel") or meta["channel"]
@@ -151,7 +154,7 @@ def transcript_node(state: GraphState):
     _emit(meta={"title": title, "channel": channel, "language": data["language"], "duration_sec": duration})
     log.info("%s: %d сегментов, %.0f мин, источник %s", video_id, len(segments), duration / 60, data["source"])
     return {"segments": segments, "language": data["language"], "title": title, "channel": channel,
-            "agent_execution_order": ["transcript"]}
+            "youtube_category": category, "agent_execution_order": ["transcript"]}
 
 
 def _samples(segments: list[dict], size: int = 900) -> str:
@@ -178,6 +181,13 @@ def classify_node(state: GraphState):
         repo.save_classification(video_id, classification)
         return {"classification": classification}
     _stage(video_id, "classify")
+    youtube_category = state.get("youtube_category")
+    if youtube_category in EDUCATIONAL_ON_YOUTUBE:  # the author filed it as educational: no model call needed
+        classification = {"category": "educational", "is_suitable": True, "confidence": 0.9,
+                          "reason": f"На YouTube видео в категории «{EDUCATIONAL_ON_YOUTUBE[youtube_category]}»."}
+        repo.save_classification(video_id, classification)
+        log.info("%s: категория YouTube «%s», модель не спрашиваю", video_id, youtube_category)
+        return {"classification": classification}
     segments = state["segments"]
     if state.get("kind") == "article":
         prompt = prompts.CLASSIFY_ARTICLE.format(
@@ -187,7 +197,7 @@ def classify_node(state: GraphState):
     else:
         prompt = prompts.CLASSIFY.format(
             title=state.get("title") or "неизвестно", channel=state.get("channel") or "неизвестно",
-            minutes=round(duration_of(segments) / 60), samples=_samples(segments),
+            category=youtube_category or "неизвестно", minutes=round(duration_of(segments) / 60), samples=_samples(segments),
         )
     fallback = {"category": "unknown", "is_suitable": True, "confidence": 0.6, "reason": "классификатор не ответил"}
     try:

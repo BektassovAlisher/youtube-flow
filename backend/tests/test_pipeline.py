@@ -173,6 +173,41 @@ def test_critic_rejection_rewrites_the_script_once(llm, youtube):
     assert "мало терминов" in second_script_prompt
 
 
+def test_educational_youtube_category_skips_the_model(llm, youtube):
+    youtube["category"] = "Education"
+    final, _ = run()
+    assert final["type"] == "done" and "classify" not in llm.kinds()
+    c = repo.get_video(VID)["classification"]
+    assert c["is_suitable"] and c["category"] == "educational" and "Образование" in c["reason"]
+
+
+def test_other_youtube_category_is_a_hint_for_the_model(llm, youtube):
+    youtube["category"] = "Music"
+    run()
+    assert "Категория на YouTube (выбирает автор, бывает неточной): Music" in dict(llm.calls)["classify"]
+
+
+def test_category_is_read_from_the_watch_page(monkeypatch):
+    from tools import youtube_scraper as yt
+
+    class Page:
+        ok = True
+        text = '<html><meta itemprop="genre" content="Science &amp; Technology"></html>'
+
+    monkeypatch.setattr(yt.requests, "get", lambda *a, **kw: Page())
+    assert yt.fetch_category(VID) == "Science & Technology"
+    Page.text = '..."category":"Education","publishDate"...'
+    assert yt.fetch_category(VID) == "Education"
+    Page.text = "<html>consent page</html>"
+    assert yt.fetch_category(VID) is None
+
+    def offline(*a, **kw):
+        raise yt.requests.ConnectionError("no network")
+
+    monkeypatch.setattr(yt.requests, "get", offline)
+    assert yt.fetch_category(VID) is None
+
+
 def test_rejected_video_and_processing_anyway(llm, youtube):
     llm.classification = '{"category": "music", "is_suitable": false, "confidence": 0.9, "reason": "клип"}'
     final, _ = run()

@@ -119,7 +119,7 @@ def youtube(monkeypatch):
     """Fake subtitles and metadata; counts how often YouTube would have been asked."""
     import agent.agent as nodes
 
-    calls = {"transcript": 0, "metadata": 0}
+    calls = {"transcript": 0, "metadata": 0, "category": None}  # set "category" to what the watch page says
 
     def get_transcript(video_id):
         calls["transcript"] += 1
@@ -131,6 +131,7 @@ def youtube(monkeypatch):
 
     monkeypatch.setattr(nodes, "get_transcript", get_transcript)
     monkeypatch.setattr(nodes, "fetch_metadata", fetch_metadata)
+    monkeypatch.setattr(nodes, "fetch_category", lambda video_id, timeout=5: calls["category"])
     return calls
 
 
