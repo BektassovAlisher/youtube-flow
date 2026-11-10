@@ -17,6 +17,12 @@ def run(video_id=VID, force=False):
     return job.future.result(timeout=30), created
 
 
+def write_script(video_id=VID):
+    """The «Написать сценарий» button."""
+    job, _ = jobs.start_script(video_id)
+    return job.future.result(timeout=30)
+
+
 def test_new_video_full_pipeline(llm, youtube):
     events = []
     original = jobs.hub.emit
@@ -32,17 +38,20 @@ def test_new_video_full_pipeline(llm, youtube):
     assert video["title"] == f"Лекция {VID}" and video["channel"] == "Канал"
     assert video["summary"].startswith("## Обзор лекции")
     assert video["keywords"][0] == "градиентный спуск"
-    assert video["podcast_script"].startswith("Алекс:")
+    assert not video["podcast_script"]  # the podcast is written by a button
     assert video["indexed"] is True
     assert repo.load_transcript(VID)[0]["text"].startswith("фраза 0")
 
-    assert llm.kinds() == ["classify", "summary", "keywords", "script", "critic"]
+    assert llm.kinds() == ["classify", "summary", "keywords"]
     stages = [e["stage"] for e in events if "stage" in e]
-    assert stages == ["transcript", "classify", "summary", "keywords", "script"]
+    assert stages == ["transcript", "classify", "summary", "keywords"]
     tokens = "".join(e["token"] for e in events if "token" in e)
     assert tokens.strip() == video["summary"]  # the summary was streamed while it was written
     saved = [k for e in events for k in e if k.endswith("_saved")]
-    assert saved == ["summary_saved", "script_saved"]
+    assert saved == ["summary_saved"]
+
+    assert write_script() == {"type": "done", "kind": "script"}
+    assert repo.get_video(VID)["podcast_script"].startswith("Алекс:")
 
 
 def test_classifier_sees_whole_video_and_keywords_come_from_summary(llm, youtube):
@@ -119,34 +128,45 @@ def test_json_answers_are_read_leniently():
 def test_processing_time_is_logged(llm, youtube, caplog):
     caplog.set_level(logging.INFO, logger="jobs")
     run()
-    line = next(r.getMessage() for r in caplog.records if "готово за" in r.getMessage())
-    for step in ("transcript", "classify", "summarize", "keywords", "script", "critic"):
-        assert f"{step} " in line
+    write_script()
+    process, script = [r.getMessage() for r in caplog.records if "готово за" in r.getMessage()]
+    for step in ("transcript", "classify", "summarize", "keywords"):
+        assert f"{step} " in process
+    for step in ("script", "critic"):
+        assert f"{step} " in script
 
 
-def test_summary_survives_a_failed_script_and_the_retry_resumes(llm, youtube):
+def test_a_failed_script_keeps_the_material_and_can_be_retried(llm, youtube):
+    run()
     llm.fail["script"] = RuntimeError("429 Resource exhausted")
-    final, _ = run()
-    assert final["type"] == "error" and final["stage"] == "script"
+    final = write_script()
+    assert final["type"] == "error" and final["kind"] == "script" and final["stage"] == "script"
     assert "лимит" in final["message"]
 
     video = repo.get_video(VID)
-    assert video["status"] == "ready"  # the summary is there and readable
+    assert video["status"] == "ready" and video["error"] is None  # the material itself is fine
     assert video["summary"] and video["keywords"] and not video["podcast_script"]
-    assert video["error"] == final["message"]
 
+    llm.fail.clear()
     llm.calls.clear()
     youtube["transcript"] = 0
-    final, _ = run()
-    assert final["type"] == "done"
-    assert llm.kinds() == ["script", "critic"]  # nothing done twice
-    assert youtube["transcript"] == 0  # the stored transcript was reused
+    assert write_script()["type"] == "done"
+    assert llm.kinds() == ["script", "critic"]  # nothing else done twice
+    assert youtube["transcript"] == 0
     assert repo.get_video(VID)["podcast_script"]
 
 
 def test_critic_rejection_rewrites_the_script_once(llm, youtube):
     llm.critic_verdicts = ['{"is_valid": false, "feedback": "мало терминов"}', '{"is_valid": true, "feedback": "ok"}']
     run()
+    events = []
+    original = jobs.hub.emit
+    jobs.hub.emit = lambda job, event: (events.append(event), original(job, event))[1]
+    try:
+        write_script()
+    finally:
+        jobs.hub.emit = original
+    assert sum(1 for e in events if e.get("restart")) == 1  # the page drops the first version
     kinds = llm.kinds()
     assert kinds.count("script") == 2 and kinds.count("critic") == 2
     second_script_prompt = [p for k, p in llm.calls if k == "script"][1]
@@ -187,12 +207,12 @@ def test_same_video_twice_runs_once(llm, youtube):
 
 def test_interrupted_runs_resume_on_startup(llm, youtube):
     run()
-    repo.clear_for_regenerate(VID, "script")
-    repo.set_stage(VID, "script")  # as if the API was restarted in the middle of the script
+    repo.clear_for_regenerate(VID, "summary")
+    repo.set_stage(VID, "summary")  # as if the API was restarted in the middle of the summary
     llm.calls.clear()
     assert jobs.resume_interrupted() == 1
     jobs.hub.wait(VID, "process", timeout=30)
-    assert llm.kinds() == ["script", "critic"]
+    assert llm.kinds() == ["summary", "keywords"]
     assert repo.get_video(VID)["stage"] == "done"
 
 
@@ -257,22 +277,28 @@ def test_overload_message_is_clear():
 def test_metrics_are_saved_per_step_with_tokens(llm, youtube):
     run()
     m = repo.get_video(VID)["metrics"]
-    assert {"transcript", "classify", "summarize", "keywords", "script", "critic"} <= set(m["steps"])
+    assert {"transcript", "classify", "summarize", "keywords", "index"} == set(m["steps"])
     assert m["seconds"] >= max(m["steps"].values()) and m["first_token"] >= 0 and m["runs"] == 1
-    # classify, keywords, script and critic: 100 in and 20 out each; the streamed summary: 1000 in and 300 out
-    assert m["tokens"] == {"input": 1400, "output": 380} and m["model"] == "gemini-3.1-flash-lite"
+    # classify and keywords: 100 in and 20 out each; the streamed summary: 1000 in and 300 out
+    assert m["tokens"] == {"input": 1200, "output": 340} and m["model"] == "gemini-3.1-flash-lite"
+
+    write_script()  # the streamed script 1000 and 300, its critic 100 and 20: added to the same material
+    m = repo.get_video(VID)["metrics"]
+    assert {"script", "critic"} <= set(m["steps"]) and m["runs"] == 2
+    assert m["tokens"] == {"input": 2300, "output": 660}
 
     stats = repo.stats()
-    assert stats["materials"] == 1 and stats["tokens"] == {"input": 1400, "output": 380}
+    assert stats["materials"] == 1 and stats["tokens"] == {"input": 2300, "output": 660}
     assert stats["avg_steps"]["summarize"] == m["steps"]["summarize"]
 
 
 def test_metrics_of_a_resumed_run_add_up(llm, youtube):
-    llm.fail["script"] = RuntimeError("429 Resource exhausted")
+    llm.fail["summary"] = ValueError("bad request")  # not an overload: the run stops at the summary
     run()
     first = repo.get_video(VID)["metrics"]
-    assert "summarize" in first["steps"] and "script" not in first["steps"]
-    run()  # only the script and its critic are left
+    assert "classify" in first["steps"] and "summarize" not in first["steps"]
+    llm.fail.clear()
+    run()  # only the summary and the terms are left
     m = repo.get_video(VID)["metrics"]
-    assert m["runs"] == 2 and m["steps"]["summarize"] == first["steps"]["summarize"] and "script" in m["steps"]
-    assert m["tokens"]["input"] == 1400 and m["seconds"] >= first["seconds"]
+    assert m["runs"] == 2 and m["steps"]["classify"] == first["steps"]["classify"] and "summarize" in m["steps"]
+    assert m["tokens"]["input"] == 1200 and m["seconds"] >= first["seconds"]

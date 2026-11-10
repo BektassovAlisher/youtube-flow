@@ -26,7 +26,7 @@ const isTab = (t: string | undefined): t is Tab => TABS.some(([k]) => k === t);
 
 export default function VideoView({ id, initial, apiDown, initialTab }: { id: string; initial: VideoInfo | null; apiDown: boolean; initialTab?: string }) {
   const router = useRouter();
-  const { video, setVideo, jobs, partial, failure, follow } = useLive(id, initial);
+  const { video, setVideo, jobs, partial, partialScript, failure, follow } = useLive(id, initial);
   const [tab, setTab] = useState<Tab>(isTab(initialTab) ? initialTab : "summary");
   const [visited, setVisited] = useState<Set<Tab>>(() => new Set([tab]));
   const [at, setAt] = useState<PlayAt>(null);
@@ -72,6 +72,7 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
   const regenerate = (part: "summary" | "script") =>
     run(() => api<VideoInfo>(`videos/${id}/regenerate`, { method: "POST", body: JSON.stringify({ part }) }));
   const createAudio = () => run(() => api(`videos/${id}/audio`, { method: "POST" }));
+  const createScript = () => run(() => api<VideoInfo>(`videos/${id}/script`, { method: "POST" }));
 
   async function remove() {
     if (!confirm("Удалить материал и всё, что по нему создано?")) return;
@@ -118,6 +119,7 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
   const kind: Kind = video.kind ?? "youtube";
   const processJob = jobs.find((j) => j.kind === "process");
   const audioJob = jobs.find((j) => j.kind === "audio");
+  const scriptJob = jobs.find((j) => j.kind === "script");
   const quiz = splitQuiz(video.summary).questions;
   // the summary is being streamed: show it in its final place instead of under the progress list
   const live = !video.summary && !!partial && video.status !== "failed" && failure?.kind !== "process";
@@ -193,9 +195,9 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
                 {label}
               </button>
             ))}
-            {processJob && (
+            {(processJob || scriptJob) && (
               <span className="tabs-status" role="status">
-                <Eq /> {live ? "Пишу конспект…" : "Пишу сценарий подкаста…"}
+                <Eq /> {live ? "Пишу конспект…" : processJob ? "Выделяю ключевые термины…" : "Пишу сценарий подкаста…"}
               </span>
             )}
           </div>
@@ -203,14 +205,17 @@ export default function VideoView({ id, initial, apiDown, initialTab }: { id: st
             visited.has(k) || k === shown ? (
               <section key={k} className="panel" role="tabpanel" hidden={shown !== k}>
                 {k === "summary" && (
-                  <Summary video={live ? { ...video, summary: partial } : video} live={live} busy={busy || !!processJob} onRegenerate={() => regenerate("summary")} />
+                  <Summary video={live ? { ...video, summary: partial } : video} live={live} busy={busy || jobs.length > 0} onRegenerate={() => regenerate("summary")} />
                 )}
                 {k === "text" && <SourceText id={id} focus={focus} />}
                 {k === "quiz" && <Quiz material={video} questions={quiz} />}
                 {k === "script" && (
-                  <Script video={video} job={processJob} failure={failure} busy={busy} onCreate={resume} onRegenerate={() => regenerate("script")} />
+                  <Script video={video} job={scriptJob} partial={partialScript} failure={failure} busy={busy || !!processJob || !!audioJob}
+                    onCreate={createScript} onRegenerate={() => regenerate("script")} />
                 )}
-                {k === "audio" && <Audio video={video} job={audioJob} failure={failure} busy={busy} onCreate={createAudio} />}
+                {k === "audio" && (
+                  <Audio video={video} job={audioJob} failure={failure} busy={busy || !!scriptJob} onCreate={createAudio} onScript={() => open("script")} />
+                )}
                 {k === "recs" && <Recommendations id={id} initial={video.recommendation} />}
                 {k === "qa" && <Questions material={video} />}
               </section>

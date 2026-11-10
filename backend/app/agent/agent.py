@@ -346,24 +346,30 @@ def index_node(state: GraphState):
         return {"indexed": False}
 
 
-def route_after_keywords(state: GraphState):
-    return "end" if state.get("podcast_script") else "script"
-
-
 def script_node(state: GraphState):
-    video_id = state["video_id"]
-    _stage(video_id, "script")
+    """The podcast script, streamed to the page like the summary. Runs on its own, by a button, not in processing."""
+    if state.get("retry_count", 0) > 0:
+        _emit(restart=True)  # the editor sent it back: the page drops the previous version
+    _emit(stage="script")
     prompt = prompts.SCRIPT.format(summary=state["summary"], keywords=", ".join(state.get("keywords") or []),
                                    host1=HOSTS[0], host2=HOSTS[1])
     if state.get("retry_count", 0) > 0 and state.get("critic_feedback"):
         prompt += prompts.SCRIPT_RETRY.format(feedback=state["critic_feedback"])
-    script = _ask(llm.gemini(), prompt).strip()
+    parts, whole = [], None
+    for chunk in llm.gemini().stream(prompt):
+        whole = chunk if whole is None else whole + chunk
+        if chunk.text:
+            parts.append(chunk.text)
+            _emit(token=chunk.text)
+    _usage(whole)
+    script = "".join(parts).strip()
     if not script:
         raise UserError("Модель вернула пустой сценарий. Попробуйте ещё раз.", status=503)
     return {"podcast_script": script, "agent_execution_order": ["script"]}
 
 
 def critic_node(state: GraphState):
+    _emit(stage="critic")
     prompt = prompts.CRITIC.format(script=_truncate(state.get("podcast_script", "")),
                                    keywords=", ".join(state.get("keywords") or []))
     try:

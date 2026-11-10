@@ -20,7 +20,7 @@ export type VideoListItem = {
 // what links to places inside a material need
 export type Material = Pick<VideoListItem, "video_id" | "kind" | "url"> & { anchors?: Record<string, string> | null };
 
-export type Job = { kind: "process" | "audio"; status: "queued" | "running"; stage: string | null; done: number; total: number };
+export type Job = { kind: "process" | "script" | "audio"; status: "queued" | "running"; stage: string | null; done: number; total: number };
 export type Classification = { category: string; is_suitable: boolean; confidence: number; reason: string };
 export type Link = { title: string; url: string };
 export type Recs = { courses: Link[]; books: Link[]; from_cache?: boolean };
@@ -119,7 +119,6 @@ export function stagesFor(kind: Kind): [string, string][] {
     ...(kind === "text" ? [] : ([["classify", kind === "article" ? "Проверяю, что это учебный материал" : "Проверяю, что это обучающая запись"]] as [string, string][])),
     ["summary", "Пишу конспект"],
     ["keywords", "Выделяю ключевые термины"],
-    ["script", "Пишу сценарий подкаста, редактор его проверяет"],
   ];
 }
 

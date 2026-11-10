@@ -42,7 +42,39 @@ def test_new_video_returns_at_once_and_streams_progress(client, youtube, llm):
     assert events[0]["type"] == "snapshot" and events[-1] == {"type": "idle"}
     jobs.hub.wait(VID, "process", timeout=30)
     video = client.get(f"/videos/{VID}").json()
-    assert video["status"] == "ready" and video["summary"] and video["podcast_script"] and video["jobs"] == []
+    assert video["status"] == "ready" and video["summary"] and video["jobs"] == []
+    assert not video["podcast_script"] and "script" not in llm.kinds()  # the podcast is written by a button
+
+
+def test_script_by_button_streams_and_is_saved(client, llm, youtube):
+    client.post("/videos", json={"video_url": VID})
+    jobs.hub.wait(VID, "process", timeout=30)
+    assert client.post(f"/videos/{VID}/audio").status_code == 409  # no script yet: nothing to voice
+    llm.calls.clear()
+
+    events = []
+    original = jobs.hub.emit
+    jobs.hub.emit = lambda job, event: (events.append(event), original(job, event))[1]
+    try:
+        r = client.post(f"/videos/{VID}/script")
+        assert r.status_code == 200 and any(j["kind"] == "script" for j in r.json()["jobs"])
+        assert jobs.hub.wait(VID, "script", timeout=30) == {"type": "done", "kind": "script"}
+    finally:
+        jobs.hub.emit = original
+    video = client.get(f"/videos/{VID}").json()
+    assert video["podcast_script"].startswith("Алекс:") and llm.kinds() == ["script", "critic"]
+    assert "".join(e["token"] for e in events if "token" in e).strip() == video["podcast_script"]
+    assert [e["stage"] for e in events if "stage" in e] == ["script", "critic"]
+    assert {"script", "critic"} <= set(video["metrics"]["steps"])
+
+    llm.calls.clear()  # a second click returns the saved script
+    assert client.post(f"/videos/{VID}/script").json()["podcast_script"] and llm.kinds() == []
+
+
+def test_script_needs_the_summary(client, llm, youtube):
+    repo.begin_processing(VID, f"https://www.youtube.com/watch?v={VID}")
+    r = client.post(f"/videos/{VID}/script")
+    assert r.status_code == 409 and "конспект" in r.json()["detail"]
 
 
 @pytest.mark.parametrize("link, hint", [
@@ -138,7 +170,7 @@ def test_regenerate_script(client, llm, youtube):
     seed_video(VID)
     r = client.post(f"/videos/{VID}/regenerate", json={"part": "script"})
     assert r.status_code == 200
-    jobs.hub.wait(VID, "process", timeout=30)
+    jobs.hub.wait(VID, "script", timeout=30)
     assert llm.kinds() == ["script", "critic"]
     assert repo.get_video(VID)["podcast_script"]
 
@@ -158,6 +190,7 @@ def test_compat_generate(client, llm, youtube):
     r = client.post("/generate", json={"video_url": f"https://youtu.be/{VID}"})
     body = r.json()
     assert r.status_code == 200 and body["video_id"] == VID and body["summary"] and not body["rejected"]
+    assert body["podcast_script"]  # the old endpoint still writes the script, it waits anyway
 
 
 def test_recommendations_are_cached(client, monkeypatch):

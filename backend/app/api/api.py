@@ -98,7 +98,24 @@ def _payload(video_id: str) -> dict:
 
 
 def _complete(video: dict) -> bool:
-    return video["status"] == "ready" and bool(video["summary"] and video["keywords"] and video["podcast_script"])
+    """Processing is done; the podcast script is written separately, by a button."""
+    return video["status"] == "ready" and bool(video["summary"] and video["keywords"])
+
+
+def _start_script(video_id: str, request: Request, before=None) -> None:
+    """`before` runs once the checks pass, right before the job starts (regenerate drops the old script there)."""
+    video = repo.get_video(video_id)
+    if video is None:
+        raise HTTPException(status_code=404, detail="Видео не найдено")
+    if not video["summary"]:
+        raise UserError("Сценарий пишется по конспекту. Дождитесь, когда он будет готов.", status=409)
+    if jobs.hub.get(video_id, "audio"):
+        raise UserError("Сейчас создаётся аудио. Дождитесь окончания.", status=409)
+    if jobs.hub.get(video_id, "script") is None:  # a new script spends LLM credits
+        limiter.hit("videos", client_id(request), config.LIMIT_VIDEOS_PER_HOUR)
+        if before:
+            before()
+    jobs.start_script(video_id)
 
 
 def _start(link: str, force: bool, request: Request) -> str:
@@ -203,11 +220,23 @@ def regenerate(video_id: str, req: Regenerate, request: Request):
     video = repo.get_video(video_id)
     if video is None:
         raise HTTPException(status_code=404, detail="Видео не найдено")
-    if jobs.hub.get(video_id, "process") or jobs.hub.get(video_id, "audio"):
+    if jobs.hub.active(video_id):
         raise UserError("Материал сейчас обрабатывается. Дождитесь окончания.", status=409)
+    if req.part == "script":
+        _start_script(video_id, request, before=lambda: repo.clear_for_regenerate(video_id, "script"))
+        return _payload(video_id)
     limiter.hit("videos", client_id(request), config.LIMIT_VIDEOS_PER_HOUR)
     repo.clear_for_regenerate(video_id, req.part)
     jobs.start_processing(video_id, video["url"])
+    return _payload(video_id)
+
+
+@app.post("/videos/{video_id}/script", dependencies=protected)
+def create_script(video_id: str, request: Request):
+    """Writes the podcast script (the scriptwriter and the editor) in the background; progress comes from /events."""
+    video = repo.get_video(video_id)
+    if video is not None and not video["podcast_script"]:
+        _start_script(video_id, request)
     return _payload(video_id)
 
 
@@ -312,8 +341,8 @@ def create_audio(video_id: str, request: Request):
     video = repo.get_video(video_id)
     if video is None:
         raise HTTPException(status_code=404, detail="Видео не найдено")
-    if not video["podcast_script"]:
-        raise UserError("Сценарий подкаста ещё не готов.", status=409)
+    if not video["podcast_script"] or jobs.hub.get(video_id, "script"):
+        raise UserError("Сначала напишите сценарий подкаста: аудио озвучивает его.", status=409)
     if jobs.hub.get(video_id, "audio") is None:
         limiter.hit("audio", client_id(request), config.LIMIT_AUDIO_PER_HOUR)
     job, _ = jobs.start_audio(video_id, video["podcast_script"])
@@ -367,6 +396,10 @@ def generate(req: GenerateRequest, request: Request):
     video_id = _start(req.video_url, False, request)
     jobs.hub.wait(video_id, "process", timeout=1800)
     video = repo.get_video(video_id)
+    if video and video["status"] == "ready" and video["summary"] and not video["podcast_script"]:
+        jobs.start_script(video_id)
+        jobs.hub.wait(video_id, "script", timeout=1800)
+        video = repo.get_video(video_id)
     if video and not req.skip_audio and video["podcast_script"] and not video["audio_ready"]:
         jobs.start_audio(video_id, video["podcast_script"])
         jobs.hub.wait(video_id, "audio", timeout=1800)

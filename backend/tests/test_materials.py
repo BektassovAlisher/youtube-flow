@@ -53,7 +53,7 @@ def test_article_pipeline(client, llm, youtube, article):
     assert "Сайт: Хабр" in prompts["classify"] and "веб-страница" in prompts["classify"]
     assert "текст статьи" in prompts["summary"] and "[¶2] Представьте" in prompts["summary"]
     assert "## Формула и шаг обучения" in prompts["summary"]  # the original's sections are kept
-    assert llm.kinds() == ["classify", "summary", "keywords", "script", "critic"]
+    assert llm.kinds() == ["classify", "summary", "keywords"]
 
 
 def test_article_answers_point_at_paragraphs(client, llm, youtube, article):
@@ -105,7 +105,7 @@ def test_pasted_text_pipeline(client, llm, youtube):
     jobs.hub.wait(tid, "process", timeout=30)
 
     video = client.get(f"/videos/{tid}").json()
-    assert video["status"] == "ready" and video["summary"] and video["podcast_script"]
+    assert video["status"] == "ready" and video["summary"] and video["keywords"]
     assert "classify" not in llm.kinds()  # pasted on purpose: no filtering
     assert "учебного материала" in dict(llm.calls)["summary"]
 
@@ -146,12 +146,14 @@ def test_library_shows_kinds(client, llm, youtube, article):
 
 
 def test_resume_keeps_the_summary_of_pasted_text(client, llm, youtube):
-    llm.fail["script"] = RuntimeError("429 Resource exhausted")
+    llm.fail["keywords"] = RuntimeError("429 Resource exhausted")  # the terms fall back to frequent ones
     tid = client.post("/videos", json={"text": PASTED}).json()["video_id"]
     jobs.hub.wait(tid, "process", timeout=30)
-    assert client.get(f"/videos/{tid}").json()["error"]
+    repo.clear_for_regenerate(tid, "summary")
+    repo.set_stage(tid, "summary")  # as if the run broke after the transcript
+    llm.fail.clear()
     llm.calls.clear()
     client.post(f"/videos/{tid}/resume")
     jobs.hub.wait(tid, "process", timeout=30)
     video = client.get(f"/videos/{tid}").json()
-    assert llm.kinds() == ["script", "critic"] and video["podcast_script"] and video["summary"]
+    assert llm.kinds() == ["summary", "keywords"] and video["summary"] and video["keywords"]
