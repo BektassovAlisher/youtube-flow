@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { api, ApiError, askStream, type Answer, type Job, type Material, type Recs, type VideoInfo } from "@/lib/api";
+import { api, ApiError, askStream, seconds, stepTimes, type Answer, type Job, type Material, type Metrics, type Recs, type VideoInfo } from "@/lib/api";
 import Eq from "../../eq";
 import ErrorText from "../../error-text";
 import type { Failure } from "./live";
@@ -65,6 +65,7 @@ export function Summary({ video, onRegenerate, busy, live = false }: { video: Vi
             </button>
           </div>
         )}
+        {!live && video.metrics?.steps && Object.keys(video.metrics.steps).length > 0 && <RunStats m={video.metrics} />}
       </div>
       <aside className="side">
         {video.keywords.length > 0 && (
@@ -98,14 +99,16 @@ async function streamAnswer(id: string, q: string, history: { q: string; a: stri
   let answer = "";
   let sources: Answer["sources"] = [];
   let frame = 0;
+  let took: number | undefined;
   const push = () => {
     frame = 0;
-    update({ answer, sources });
+    update({ answer, sources, seconds: took });
   };
   await askStream(id, q, history, (e) => {
     if (e.type === "error") throw new ApiError(e.message, 500);
     if (e.type === "sources") sources = e.sources;
     if (e.type === "token") answer += e.text;
+    if (e.type === "done" && !e.cached) took = e.seconds;
     if (!frame) frame = requestAnimationFrame(push);
   });
   cancelAnimationFrame(frame);
@@ -127,7 +130,49 @@ function AnswerView({ a, material, live }: { a: Answer; material: Material; live
           ))}
         </div>
       )}
+      {a.seconds !== undefined && !live && <p className="took">Ответ за {seconds(a.seconds)}</p>}
     </div>
+  );
+}
+
+// how long the processing took, step by step: the numbers the API measured for this material
+function RunStats({ m }: { m: Metrics }) {
+  const tokens = (m.tokens?.input ?? 0) + (m.tokens?.output ?? 0);
+  return (
+    <details className="run-stats">
+      <summary>
+        Обработано за {seconds(m.seconds)}
+        {m.first_token !== undefined && <>, первые строки конспекта через {seconds(m.first_token)}</>}
+      </summary>
+      <dl>
+        {stepTimes(m).map((s) => (
+          <div key={s.label}>
+            <dt>{s.label}</dt>
+            <dd>{s.time}</dd>
+          </div>
+        ))}
+        {m.audio !== undefined && (
+          <div>
+            <dt>озвучка</dt>
+            <dd>{seconds(m.audio)}</dd>
+          </div>
+        )}
+        {tokens > 0 && (
+          <div>
+            <dt>токены</dt>
+            <dd>
+              {(m.tokens?.input ?? 0).toLocaleString("ru-RU")} на входе, {(m.tokens?.output ?? 0).toLocaleString("ru-RU")} на выходе
+            </dd>
+          </div>
+        )}
+        {m.model && (
+          <div>
+            <dt>модель</dt>
+            <dd>{m.model}</dd>
+          </div>
+        )}
+      </dl>
+    </details>
   );
 }
 

@@ -72,7 +72,7 @@ def test_answer_is_streamed_then_cached(llm):
     seed_video(VID)
     charged = []
     events = collect(VID, "Что такое вес?", charge=lambda: charged.append(1))
-    assert [e["type"] for e in events][0] == "sources" and events[-1] == {"type": "done", "cached": False}
+    assert [e["type"] for e in events][0] == "sources" and events[-1]["type"] == "done" and events[-1]["cached"] is False and "seconds" in events[-1]
     assert "".join(e["text"] for e in events if e["type"] == "token").startswith("Вес")
     prompt = dict(llm.calls)["qa"]
     assert "## Обзор лекции" in prompt and "## [10:00] Обучение" in prompt  # the summary outline is in the context

@@ -121,7 +121,7 @@ def test_questions_stream_and_cache(client, llm):
     seed_video(VID)
     r = client.post(f"/videos/{VID}/qa/stream", json={"question": "Что такое вес?"})
     events = ndjson(r)
-    assert events[0]["type"] == "sources" and events[-1] == {"type": "done", "cached": False}
+    assert events[0]["type"] == "sources" and events[-1]["type"] == "done" and events[-1]["cached"] is False and "seconds" in events[-1]
     r = client.post(f"/videos/{VID}/qa", json={"question": "Что такое вес?"})
     assert r.json()["cached"] is True and r.json()["answer"].startswith("Вес")
 
