@@ -453,6 +453,16 @@ button:disabled, [aria-disabled="true"], .upload[aria-disabled] { cursor: not-al
   .quiz-list, .rows:not(.compact) { padding: 0 16px; }
 }
 
+/* measured numbers of this material's processing: one line, the step table opens on demand */
+.run-stats { max-width: 68ch; margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--rule); font-size: 14px; color: var(--muted); }
+.run-stats summary { cursor: pointer; width: fit-content; padding: 4px 0; }
+.run-stats summary:hover { color: var(--ink); }
+.run-stats dl { display: grid; gap: 4px; margin: 10px 0 0; font-variant-numeric: tabular-nums; }
+.run-stats dl > div { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 12px; }
+.run-stats dt { color: var(--muted); }
+.run-stats dd { margin: 0; color: var(--ink-2); }
+.took { margin: 8px 0 0; font-size: 14px; color: var(--muted); }
+
 /* the narrowest phones (320px): brand, menu and the theme button still fit in one row */
 @media (max-width: 360px) {
   .navbar, .nav { gap: 10px; }

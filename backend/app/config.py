@@ -34,6 +34,11 @@ _THINKING = (os.getenv("GEMINI_THINKING_LEVEL") or "").strip().lower()
 GEMINI_THINKING_LEVEL = _THINKING if _THINKING in ("minimal", "low", "medium", "high") else None
 WHISPER_MODEL = os.getenv("WHISPER_MODEL") or "whisper-large-v3-turbo"
 
+# LangSmith tracing (optional): the langsmith library reads LANGSMITH_TRACING, LANGSMITH_API_KEY and
+# LANGSMITH_PROJECT from the environment itself; these two are only for the startup log line
+LANGSMITH_TRACING = _bool("LANGSMITH_TRACING", False) and bool(os.getenv("LANGSMITH_API_KEY"))
+LANGSMITH_PROJECT = os.getenv("LANGSMITH_PROJECT") or "default"
+
 # same model as before (sentence-transformers), served through ONNX by fastembed: no torch needed
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 FASTEMBED_CACHE_PATH = os.getenv("FASTEMBED_CACHE_PATH") or None  # Docker bakes the model into /opt/models

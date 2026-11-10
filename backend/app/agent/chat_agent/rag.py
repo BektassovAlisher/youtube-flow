@@ -382,7 +382,8 @@ async def answer_events(video_id: str, question: str, history: list[dict] | None
                               history=_history(history), question=q)
     parts, started, first = [], time.monotonic(), None
     head, opened = "", False  # the first sentences wait until a possible greeting can be cut off
-    async for chunk in llm.gemini().astream(prompt):
+    trace = {"run_name": "VideoFlow: ответ на вопрос", "tags": ["qa"], "metadata": {"video_id": video_id}}
+    async for chunk in llm.gemini().astream(prompt, trace):
         text = chunk.text
         if not text:
             continue
@@ -405,4 +406,4 @@ async def answer_events(video_id: str, question: str, history: list[dict] | None
     log.info("%s: ответ за %.1f с, первые слова через %.1f с", video_id, time.monotonic() - started, first or 0)
     if not history:
         await asyncio.to_thread(repo.save_answer, video_id, key, q, answer, found)
-    yield {"type": "done", "cached": False}
+    yield {"type": "done", "cached": False, "seconds": round(time.monotonic() - started, 1), "first_token": round(first or 0, 1)}

@@ -62,6 +62,7 @@ def get_video(video_id: str) -> dict | None:
             "indexed": bool(v.indexed),
             "transcript_source": v.transcript_source,
             "anchors": v.anchors,
+            "metrics": v.metrics,
         }
 
 
@@ -204,7 +205,50 @@ def clear_for_regenerate(video_id: str, part: str) -> None:
             s.execute(delete(Summary).where(Summary.video_id == video_id))
             s.execute(delete(Keyword).where(Keyword.video_id == video_id))
             s.execute(delete(QAAnswer).where(QAAnswer.video_id == video_id))
+            s.execute(update(Video).where(Video.video_id == video_id).values(metrics=None))  # a new run, new numbers
     _audio_cache.drop(video_id)
+
+
+# ---- metrics ----------------------------------------------------------------------------------
+
+def add_metrics(video_id: str, run: dict) -> None:
+    """Adds one run to the material's metrics. A resumed run only does the steps that were left, so seconds,
+    step times and tokens add up; the time to the first words is kept from the run that wrote the summary."""
+    with _session() as s:
+        v = s.get(Video, video_id)
+        if v is None:
+            return
+        m = dict(v.metrics or {})
+        m["seconds"] = round(m.get("seconds", 0) + run.get("seconds", 0), 2)
+        steps = dict(m.get("steps") or {})
+        for name, sec in (run.get("steps") or {}).items():
+            steps[name] = round(steps.get(name, 0) + sec, 2)
+        m["steps"] = steps
+        tokens = dict(m.get("tokens") or {})
+        for name, n in (run.get("tokens") or {}).items():
+            tokens[name] = tokens.get(name, 0) + n
+        m["tokens"] = tokens
+        for key in ("first_token", "audio", "model"):
+            if run.get(key) is not None:
+                m[key] = run[key]
+        m["runs"] = m.get("runs", 0) + (1 if run.get("steps") else 0)
+        v.metrics = m
+
+
+def stats() -> dict:
+    """Averages over the materials that have metrics: for the README's numbers and a quick health look."""
+    with _session() as s:
+        rows = [m for m in s.scalars(select(Video.metrics).where(Video.status == "ready")).all() if m and m.get("steps")]
+    avg = lambda values: round(sum(values) / len(values), 2) if values else None  # noqa: E731
+    names = sorted({name for m in rows for name in m["steps"]})
+    return {
+        "materials": len(rows),
+        "avg_seconds": avg([m["seconds"] for m in rows]),
+        "avg_first_token": avg([m["first_token"] for m in rows if m.get("first_token") is not None]),
+        "avg_steps": {name: avg([m["steps"][name] for m in rows if name in m["steps"]]) for name in names},
+        "avg_audio": avg([m["audio"] for m in rows if m.get("audio") is not None]),
+        "tokens": {k: sum((m.get("tokens") or {}).get(k, 0) for m in rows) for k in ("input", "output")},
+    }
 
 
 # ---- audio ------------------------------------------------------------------------------------

@@ -56,6 +56,7 @@ class Video(Base):
     image_url = Column(Text)  # article cover (og:image)
     word_count = Column(Integer)  # articles and pasted text: for the reading time
     anchors = Column(JSON)  # articles: {"N": first words of paragraph N} for links into the original page
+    metrics = Column(JSON)  # how the processing went: seconds per step, time to first words, tokens, model
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
 

@@ -84,15 +84,17 @@ class FakeChat:
     def kinds(self) -> list[str]:
         return [k for k, _ in self.calls]
 
-    def invoke(self, prompt):
-        return AIMessage(content=self._answer(prompt))
+    def invoke(self, prompt, config=None):
+        return AIMessage(content=self._answer(prompt), usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120})
 
-    def stream(self, prompt):
+    def stream(self, prompt, config=None):
         text = self._answer(prompt)
-        for i in range(0, len(text), 40):
-            yield AIMessageChunk(content=text[i:i + 40])
+        pieces = [text[i:i + 40] for i in range(0, len(text), 40)]
+        for i, piece in enumerate(pieces):  # like the real API: the token counts come with the last chunk
+            usage = {"input_tokens": 1000, "output_tokens": 300, "total_tokens": 1300} if i == len(pieces) - 1 else None
+            yield AIMessageChunk(content=piece, usage_metadata=usage)
 
-    async def astream(self, prompt):
+    async def astream(self, prompt, config=None):
         for chunk in self.stream(prompt):
             yield chunk
 

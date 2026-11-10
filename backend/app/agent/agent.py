@@ -37,6 +37,20 @@ def _emit(**event) -> None:
         pass
 
 
+def _usage(message) -> None:
+    """Reports the tokens of a model answer (a "usage" event) when the model says how many it used."""
+    usage = getattr(message, "usage_metadata", None) or {}
+    if usage.get("input_tokens") or usage.get("output_tokens"):
+        _emit(usage={"input": usage.get("input_tokens", 0), "output": usage.get("output_tokens", 0)})
+
+
+def _ask(model, prompt: str) -> str:
+    """One model call: the answer's text, with its tokens reported."""
+    result = model.invoke(prompt)
+    _usage(result)
+    return extract_text(result)
+
+
 def _stage(video_id: str, stage: str) -> None:
     repo.set_stage(video_id, stage)
     _emit(stage=stage)
@@ -177,7 +191,7 @@ def classify_node(state: GraphState):
         )
     fallback = {"category": "unknown", "is_suitable": True, "confidence": 0.6, "reason": "классификатор не ответил"}
     try:
-        parsed = _parse_json(extract_text(llm.gemini_json().invoke(prompt)), dict) or {}
+        parsed = _parse_json(_ask(llm.gemini_json(), prompt), dict) or {}
     except Exception as e:  # noqa: BLE001 — a failed check must not block the summary
         log.warning("классификатор недоступен: %s", e)
         parsed = {}
@@ -236,15 +250,21 @@ def summarize_node(state: GraphState):
                                              text=sources.prompt_text(state["segments"]))
     # The SDK retries a request that fails before the answer starts; an overload that breaks the stream midway
     # ("503 UNAVAILABLE ... high demand") is retried here, and the page drops the half-written text first.
+    started = time.monotonic()
     for attempt, pause in enumerate((*SUMMARY_PAUSES, None)):
-        parts = []
+        parts, whole, first = [], None, None
         model = llm.gemini() if attempt == 0 else llm.gemini_backup()  # later attempts go to the fallback model
         try:
             for chunk in model.stream(prompt):  # tokens go straight to the page that waits for the summary
+                whole = chunk if whole is None else whole + chunk  # adds up the token counts of the chunks
                 text = chunk.text
                 if text:
+                    first = first if first is not None else time.monotonic() - started
                     parts.append(text)
                     _emit(token=text)
+            _usage(whole)
+            if first is not None:
+                _emit(timing={"first_token": round(first, 2)})  # how long the reader waited for the first words
             break
         except Exception as e:  # noqa: BLE001 — only overloads and timeouts are retried, everything else is raised
             if pause is None or not _transient(e):
@@ -300,7 +320,7 @@ def keywords_node(state: GraphState):
         prompt = prompts.KEYWORDS.format(headings=headings or "(нет)",
                                          terms=_truncate("\n".join(f"{t} ({n})" for t, n in terms), 3000))
         try:
-            keywords = _clean_keywords(_parse_json(extract_text(llm.gemini_json().invoke(prompt)), list))
+            keywords = _clean_keywords(_parse_json(_ask(llm.gemini_json(), prompt), list))
         except Exception as e:  # noqa: BLE001
             log.warning("ключевые слова: модель недоступна (%s), беру самые частые термины", e)
     if not keywords:
@@ -337,7 +357,7 @@ def script_node(state: GraphState):
                                    host1=HOSTS[0], host2=HOSTS[1])
     if state.get("retry_count", 0) > 0 and state.get("critic_feedback"):
         prompt += prompts.SCRIPT_RETRY.format(feedback=state["critic_feedback"])
-    script = extract_text(llm.gemini().invoke(prompt)).strip()
+    script = _ask(llm.gemini(), prompt).strip()
     if not script:
         raise UserError("Модель вернула пустой сценарий. Попробуйте ещё раз.", status=503)
     return {"podcast_script": script, "agent_execution_order": ["script"]}
@@ -347,7 +367,7 @@ def critic_node(state: GraphState):
     prompt = prompts.CRITIC.format(script=_truncate(state.get("podcast_script", "")),
                                    keywords=", ".join(state.get("keywords") or []))
     try:
-        verdict = _parse_json(extract_text(llm.gemini_json().invoke(prompt)), dict) or {}
+        verdict = _parse_json(_ask(llm.gemini_json(), prompt), dict) or {}
     except Exception as e:  # noqa: BLE001 — the editor is optional: keep the script
         log.warning("критик недоступен: %s", e)
         verdict = {}
