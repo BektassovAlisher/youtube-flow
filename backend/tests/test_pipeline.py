@@ -208,6 +208,13 @@ def test_category_is_read_from_the_watch_page(monkeypatch):
     assert yt.fetch_category(VID) is None
 
 
+def test_summary_asks_for_sections_by_length(llm, youtube):
+    run()  # 200 captions of 6 s: a 20-minute lecture
+    prompt = dict(llm.calls)["summary"]
+    assert "Лекция длится 20 мин. Число разделов: около 3" in prompt and "до самого конца лекции" in prompt
+    assert [nodes.section_count(m / 6) for m in (5, 60, 90, 600)] == [2, 10, 15, 25]
+
+
 def test_rejected_video_and_processing_anyway(llm, youtube):
     llm.classification = '{"category": "music", "is_suitable": false, "confidence": 0.9, "reason": "клип"}'
     final, _ = run()
