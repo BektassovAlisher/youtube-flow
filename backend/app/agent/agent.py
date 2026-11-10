@@ -177,6 +177,7 @@ def classify_node(state: GraphState):
                           "reason": "Текст добавлен вручную."}
         repo.save_classification(video_id, classification)
         return {"classification": classification}
+    _stage(video_id, "classify")
     segments = state["segments"]
     if state.get("kind") == "article":
         prompt = prompts.CLASSIFY_ARTICLE.format(
@@ -214,7 +215,7 @@ def classify_node(state: GraphState):
 def route_classify(state: GraphState):
     c = state.get("classification") or {}
     if state.get("force") or (c.get("is_suitable") and c.get("confidence", 1.0) >= 0.6):
-        return "keywords"
+        return "start_pipeline"
     return "reject"
 
 
@@ -224,7 +225,7 @@ def reject_node(state: GraphState):
     return {"rejected": True, "agent_execution_order": ["reject"]}
 
 
-def gate_node(state: GraphState):
+def start_pipeline_node(state: GraphState):
     return {}
 
 
