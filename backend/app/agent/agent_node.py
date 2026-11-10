@@ -6,25 +6,39 @@ START → load → transcript → classify ─┬─▶ reject → END
                                                           └─▶ index → END
 
 Nodes persist their output and skip saved work, so the same graph resumes an interrupted run."""
+import time
+
 from langgraph.graph import END, START, StateGraph
 
 from agent.agent import (
-    GraphState, classify_node, critic_node, index_node, keywords_node, load_node, reject_node, route_after_keywords,
+    GraphState, _emit, classify_node, critic_node, index_node, keywords_node, load_node, reject_node, route_after_keywords,
     route_classify, route_critic, save_script_node, script_node, start_pipeline_node, summarize_node, transcript_node,
 )
 
+
+
+def timed(name: str, node):
+    """Reports how long a step took (a "timing" event). Steps that find their work already saved return
+    nothing and are not counted."""
+    def run(state):
+        started = time.monotonic()
+        out = node(state)
+        if out:
+            _emit(timing={name: round(time.monotonic() - started, 2)})
+        return out
+
+    run.__name__ = name
+    return run
+
+
 graph = StateGraph(GraphState)
 graph.add_node("load", load_node)
-graph.add_node("transcript", transcript_node)
-graph.add_node("classify", classify_node)
 graph.add_node("reject", reject_node)
 graph.add_node("start_pipeline", start_pipeline_node)
-graph.add_node("summarize", summarize_node)
-graph.add_node("index", index_node)
-graph.add_node("keywords", keywords_node)
-graph.add_node("script", script_node)
-graph.add_node("critic", critic_node)
 graph.add_node("save_script", save_script_node)
+for _name, _node in (("transcript", transcript_node), ("classify", classify_node), ("summarize", summarize_node),
+                     ("index", index_node), ("keywords", keywords_node), ("script", script_node), ("critic", critic_node)):
+    graph.add_node(_name, timed(_name, _node))
 
 graph.add_edge(START, "load")
 graph.add_edge("load", "transcript")

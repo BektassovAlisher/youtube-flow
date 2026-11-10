@@ -252,3 +252,27 @@ def test_not_overloaded_errors_are_not_retried(llm, youtube, monkeypatch):
 def test_overload_message_is_clear():
     from errors import humanize
     assert "перегружена" in humanize(Overloaded("503 UNAVAILABLE. high demand"))
+
+
+def test_metrics_are_saved_per_step_with_tokens(llm, youtube):
+    run()
+    m = repo.get_video(VID)["metrics"]
+    assert {"transcript", "classify", "summarize", "keywords", "script", "critic"} <= set(m["steps"])
+    assert m["seconds"] >= max(m["steps"].values()) and m["first_token"] >= 0 and m["runs"] == 1
+    # classify, keywords, script and critic: 100 in and 20 out each; the streamed summary: 1000 in and 300 out
+    assert m["tokens"] == {"input": 1400, "output": 380} and m["model"] == "gemini-3.1-flash-lite"
+
+    stats = repo.stats()
+    assert stats["materials"] == 1 and stats["tokens"] == {"input": 1400, "output": 380}
+    assert stats["avg_steps"]["summarize"] == m["steps"]["summarize"]
+
+
+def test_metrics_of_a_resumed_run_add_up(llm, youtube):
+    llm.fail["script"] = RuntimeError("429 Resource exhausted")
+    run()
+    first = repo.get_video(VID)["metrics"]
+    assert "summarize" in first["steps"] and "script" not in first["steps"]
+    run()  # only the script and its critic are left
+    m = repo.get_video(VID)["metrics"]
+    assert m["runs"] == 2 and m["steps"]["summarize"] == first["steps"]["summarize"] and "script" in m["steps"]
+    assert m["tokens"]["input"] == 1400 and m["seconds"] >= first["seconds"]
