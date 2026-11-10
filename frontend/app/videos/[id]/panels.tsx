@@ -226,18 +226,9 @@ function QuizCard({ material, n, q }: { material: Material; n: number; q: string
   );
 }
 
-export function Script({ video, job, failure, busy, onCreate, onRegenerate }: {
-  video: VideoInfo; job?: Job; failure: Failure | null; busy: boolean; onCreate: () => void; onRegenerate: () => void;
-}) {
-  if (job) {
-    return (
-      <div className="block">
-        <p className="status"><Eq /> {job.status === "queued" ? "Сценарий в очереди…" : "Пишу сценарий, редактор проверяет каждую версию…"}</p>
-        <p className="muted">Конспект уже готов, сценарий появится здесь сам.</p>
-      </div>
-    );
-  }
-  const lines = video.podcast_script
+// "Алекс: текст" lines of a script (finished or still being written) as speaker and words
+function dialogue(script: string) {
+  return script
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean)
@@ -246,26 +237,51 @@ export function Script({ video, job, failure, busy, onCreate, onRegenerate }: {
       const name = i > 0 ? l.slice(0, i).replace(/\*/g, "").trim() : "";
       return name && name.length <= 20 ? { name, text: l.slice(i + 1).replace(/^[\s*]+/, "") } : { name: "", text: l };
     });
-  if (!lines.length) {
-    const message = failure?.kind === "process" ? failure.message : video.error;
+}
+
+function Dialogue({ script }: { script: string }) {
+  const lines = dialogue(script);
+  const first = lines.find((l) => l.name)?.name;
+  return (
+    <dl className="dialogue">
+      {lines.map((l, i) => (
+        <div key={i}>
+          <dt className={l.name && l.name !== first ? "b" : undefined}>{l.name}</dt>
+          <dd>{l.text}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+export function Script({ video, job, partial, failure, busy, onCreate, onRegenerate }: {
+  video: VideoInfo; job?: Job; partial: string; failure: Failure | null; busy: boolean; onCreate: () => void; onRegenerate: () => void;
+}) {
+  if (job) {
+    const status = job.status === "queued" ? "Сценарий в очереди…"
+      : job.stage === "critic" ? "Редактор проверяет сценарий…"
+      : partial ? "Пишу сценарий…" : "Готовлю сценарий по конспекту…";
+    return (
+      <>
+        <p className="status" role="status"><Eq /> {status}</p>
+        {/* the script appears line by line; if the editor sends it back, it is written again from the start */}
+        {partial && <Dialogue script={partial} />}
+      </>
+    );
+  }
+  if (!video.podcast_script.trim()) {
+    const message = failure?.kind === "script" ? failure.message : null;
     return (
       <div className="block">
-        {message ? <ErrorText error={message} /> : <p>Сценария подкаста пока нет.</p>}
-        <button className="btn primary" onClick={onCreate} disabled={busy}>{message ? "Повторить" : "Написать сценарий"}</button>
+        {message && <ErrorText error={message} />}
+        <p>Сценария подкаста пока нет. Два ведущих обсудят конспект своими словами, а редактор проверит, что ничего важного не потерялось.</p>
+        <button className="btn primary" onClick={onCreate} disabled={busy || !video.summary}>{message ? "Повторить" : "Написать сценарий"}</button>
       </div>
     );
   }
-  const first = lines.find((l) => l.name)?.name;
   return (
     <>
-      <dl className="dialogue">
-        {lines.map((l, i) => (
-          <div key={i}>
-            <dt className={l.name && l.name !== first ? "b" : undefined}>{l.name}</dt>
-            <dd>{l.text}</dd>
-          </div>
-        ))}
-      </dl>
+      <Dialogue script={video.podcast_script} />
       <div className="toolbar">
         <button className="btn small" disabled={busy} onClick={() => confirm("Написать сценарий заново? Аудио тоже придётся создать заново.") && onRegenerate()}>
           Пересоздать сценарий
@@ -275,7 +291,9 @@ export function Script({ video, job, failure, busy, onCreate, onRegenerate }: {
   );
 }
 
-export function Audio({ video, job, failure, busy, onCreate }: { video: VideoInfo; job?: Job; failure: Failure | null; busy: boolean; onCreate: () => void }) {
+export function Audio({ video, job, failure, busy, onCreate, onScript }: {
+  video: VideoInfo; job?: Job; failure: Failure | null; busy: boolean; onCreate: () => void; onScript: () => void;
+}) {
   const id = video.video_id;
   // a new version gets a new URL, so the browser does not keep playing a stale file
   const [version, setVersion] = useState(0);
@@ -314,7 +332,10 @@ export function Audio({ video, job, failure, busy, onCreate }: { video: VideoInf
           <button className="btn primary" onClick={onCreate} disabled={busy}>Создать аудио</button>
         </>
       ) : (
-        <p className="muted">Аудио можно будет создать, когда будет готов сценарий подкаста.</p>
+        <>
+          <p>Аудио озвучивает сценарий подкаста. Чтобы создать аудио, сначала напишите сценарий.</p>
+          <button className="btn" onClick={onScript}>Перейти к сценарию</button>
+        </>
       )}
       {failure?.kind === "audio" && <ErrorText error={failure.message} />}
     </div>

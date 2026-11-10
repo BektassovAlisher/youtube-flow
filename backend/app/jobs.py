@@ -21,13 +21,13 @@ PING_SECONDS = 15
 @dataclass
 class Job:
     video_id: str
-    kind: str  # "process" | "audio"
+    kind: str  # "process" | "script" | "audio"
     status: str = "queued"  # queued | running
     stage: str | None = None
     done: int = 0
     total: int = 0
     rejected: bool = False
-    tokens: list[str] = field(default_factory=list)  # the summary as it is being written
+    tokens: list[str] = field(default_factory=list)  # the summary or the script as it is being written
     future: Future | None = None
 
     def snapshot(self) -> dict:
@@ -116,15 +116,15 @@ class Hub:
             if "progress" in event:
                 job.done, job.total = event["progress"]
                 out.append({"type": "job", **job.snapshot()})
-            if event.get("restart"):  # the summary stream broke and starts over: drop what was written
+            if event.get("restart"):  # the text starts over (a broken stream, a script the editor sent back)
                 job.tokens.clear()
-                out.append({"type": "restart"})
+                out.append({"type": "restart", "kind": job.kind})
             if "token" in event:
                 job.tokens.append(event["token"])
-                out.append({"type": "token", "text": event["token"]})
+                out.append({"type": "token", "kind": job.kind, "text": event["token"]})
             for what in ("summary", "script", "audio", "meta"):
                 if event.get(f"{what}_saved") or (what == "meta" and "meta" in event):
-                    if what == "summary":
+                    if what in ("summary", "script"):
                         job.tokens.clear()  # it is in the database now
                     out.append({"type": "saved", "what": what})
             if "rejected" in event:
@@ -146,9 +146,9 @@ class Hub:
         subscriber = (asyncio.get_running_loop(), asyncio.Queue())
         with self._lock:
             jobs = [j for (v, _), j in self._jobs.items() if v == video_id]
-            process = next((j for j in jobs if j.kind == "process"), None)
+            partial = {j.kind: "".join(j.tokens) for j in jobs}
             snapshot = {"type": "snapshot", "jobs": [j.snapshot() for j in jobs],
-                        "partial_summary": "".join(process.tokens) if process else ""}
+                        "partial_summary": partial.get("process", ""), "partial_script": partial.get("script", "")}
             if jobs:
                 self._subscribers.setdefault(video_id, set()).add(subscriber)
         try:
@@ -178,10 +178,38 @@ class Hub:
 hub = Hub(config.MAX_CONCURRENT_JOBS)
 
 
-# ---- the two kinds of work --------------------------------------------------------------------
+# ---- the three kinds of work ------------------------------------------------------------------
+
+def _run_graph(job: Job, graph, state: dict, trace: dict) -> None:
+    """Runs a graph, passes its events to the pages and saves how long each step took and the tokens."""
+    from db import cache as repo
+
+    started, marks = time.monotonic(), []
+    run: dict = {"steps": {}, "tokens": {"input": 0, "output": 0}, "model": config.GEMINI_MODEL}
+    try:
+        for mode, payload in graph.stream(state, trace, stream_mode=["custom", "updates"]):
+            if mode == "custom":
+                for step, seconds in (payload.get("timing") or {}).items():
+                    if step == "first_token":
+                        run["first_token"] = seconds
+                    else:  # the script and its critic can run more than once
+                        run["steps"][step] = round(run["steps"].get(step, 0) + seconds, 2)
+                for name, n in (payload.get("usage") or {}).items():
+                    run["tokens"][name] += n
+                hub.emit(job, payload)
+            else:  # a step finished: when, counting from the start (steps already saved do nothing)
+                marks += [f"{step} {time.monotonic() - started:.1f}" for step, update in payload.items() if update]
+    finally:  # a failed run counts too: the retry only does what is left, and the numbers add up
+        run["seconds"] = round(time.monotonic() - started, 2)
+        if run["steps"]:
+            repo.add_metrics(job.video_id, run)
+            hub.emit(job, {"meta": True})  # pages reload the material and show the numbers
+    log.info("%s/%s: готово за %.1f с; шаги закончились на секунде: %s; токены: %d на входе, %d на выходе",
+             job.video_id, job.kind, run["seconds"], ", ".join(marks) or "—", run["tokens"]["input"], run["tokens"]["output"])
+
 
 def start_processing(video_id: str, url: str, force: bool = False, kind: str | None = None) -> tuple[Job, bool]:
-    """`kind` only matters for a new material; an existing one keeps its own."""
+    """Everything up to the key terms. `kind` only matters for a new material; an existing one keeps its own."""
     from agent.agent_node import app as graph, initial_state
     from db import cache as repo
 
@@ -189,37 +217,32 @@ def start_processing(video_id: str, url: str, force: bool = False, kind: str | N
         repo.begin_processing(video_id, url, force, kind)
 
     def work(job: Job) -> None:
-        started, marks = time.monotonic(), []
-        run: dict = {"steps": {}, "tokens": {"input": 0, "output": 0}, "model": config.GEMINI_MODEL}
         # in LangSmith (when tracing is on) the whole run is one trace, found by the material's id
         trace = {"run_name": "VideoFlow: обработка материала", "tags": ["process"], "metadata": {"video_id": video_id}}
         try:
-            for mode, payload in graph.stream(initial_state(video_id, force), trace, stream_mode=["custom", "updates"]):
-                if mode == "custom":
-                    for step, seconds in (payload.get("timing") or {}).items():
-                        if step == "first_token":
-                            run["first_token"] = seconds
-                        else:  # the script and its critic can run more than once
-                            run["steps"][step] = round(run["steps"].get(step, 0) + seconds, 2)
-                    for name, n in (payload.get("usage") or {}).items():
-                        run["tokens"][name] += n
-                    hub.emit(job, payload)
-                else:  # a step finished: when, counting from the start (steps already saved do nothing)
-                    marks += [f"{step} {time.monotonic() - started:.1f}" for step, update in payload.items() if update]
+            _run_graph(job, graph, initial_state(video_id, force), trace)
             if not job.rejected:
                 repo.finish(video_id)
         except Exception as e:
             repo.fail(video_id, humanize(e))
             raise
-        finally:  # a failed run counts too: the retry only does what is left, and the numbers add up
-            run["seconds"] = round(time.monotonic() - started, 2)
-            if run["steps"]:
-                repo.add_metrics(video_id, run)
-                hub.emit(job, {"meta": True})  # pages reload the material and show the numbers
-        log.info("%s: готово за %.1f с; шаги закончились на секунде: %s; токены: %d на входе, %d на выходе",
-                 video_id, run["seconds"], ", ".join(marks) or "—", run["tokens"]["input"], run["tokens"]["output"])
 
     return hub.submit(video_id, "process", work)
+
+
+def start_script(video_id: str) -> tuple[Job, bool]:
+    """The podcast script, by a button: the scriptwriter and the editor, from the saved summary and terms."""
+    from agent.agent_node import script_app, script_state
+    from db import cache as repo
+
+    def work(job: Job) -> None:
+        video = repo.get_video(video_id)
+        if not video or not video["summary"]:
+            raise UserError("Сценарий пишется по конспекту, а его ещё нет.", status=409)
+        trace = {"run_name": "VideoFlow: сценарий подкаста", "tags": ["script"], "metadata": {"video_id": video_id}}
+        _run_graph(job, script_app, script_state(video), trace)
+
+    return hub.submit(video_id, "script", work)
 
 
 def start_audio(video_id: str, script: str) -> tuple[Job, bool]:
