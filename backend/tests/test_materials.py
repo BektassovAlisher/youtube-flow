@@ -53,7 +53,7 @@ def test_article_pipeline(client, llm, youtube, article):
     assert "Сайт: Хабр" in prompts["classify"] and "веб-страница" in prompts["classify"]
     assert "текст статьи" in prompts["summary"] and "[¶2] Представьте" in prompts["summary"]
     assert "## Формула и шаг обучения" in prompts["summary"]  # the original's sections are kept
-    assert sorted(llm.kinds()[:2]) == ["classify", "summary"] and llm.kinds()[2:] == ["keywords", "script", "critic"]
+    assert llm.kinds() == ["classify", "summary", "keywords", "script", "critic"]
 
 
 def test_article_answers_point_at_paragraphs(client, llm, youtube, article):

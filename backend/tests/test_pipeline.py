@@ -36,10 +36,9 @@ def test_new_video_full_pipeline(llm, youtube):
     assert video["indexed"] is True
     assert repo.load_transcript(VID)[0]["text"].startswith("фраза 0")
 
-    assert sorted(llm.kinds()[:2]) == ["classify", "summary"]  # the check runs alongside the summary
-    assert llm.kinds()[2:] == ["keywords", "script", "critic"]
+    assert llm.kinds() == ["classify", "summary", "keywords", "script", "critic"]
     stages = [e["stage"] for e in events if "stage" in e]
-    assert stages == ["transcript", "summary", "keywords", "script"]
+    assert stages == ["transcript", "classify", "summary", "keywords", "script"]
     tokens = "".join(e["token"] for e in events if "token" in e)
     assert tokens.strip() == video["summary"]  # the summary was streamed while it was written
     saved = [k for e in events for k in e if k.endswith("_saved")]
@@ -160,34 +159,13 @@ def test_rejected_video_and_processing_anyway(llm, youtube):
     assert final["type"] == "done"
     video = repo.get_video(VID)
     assert video["status"] == "rejected" and video["classification"]["reason"] == "клип"
-    assert video["summary"] and sorted(llm.kinds()) == ["classify", "summary"]  # written while the check ran
-    assert not video["keywords"] and not video["podcast_script"]  # the run stops at the gate
+    assert not video["summary"] and "summary" not in llm.kinds()
 
     llm.calls.clear()
     run(force=True)
     video = repo.get_video(VID)
     assert video["status"] == "ready" and video["summary"] and video["force"] is True
-    assert llm.kinds() == ["keywords", "script", "critic"]  # the verdict and the summary are kept
-
-
-def test_check_does_not_hold_back_the_summary(llm, youtube):
-    """The check and the summary start together: the summary is streaming while the check still waits."""
-    summary_started, overlapped = threading.Event(), []
-    invoke, stream = llm.invoke, llm.stream
-
-    def slow_check(prompt, config=None):
-        if "классификатор" in prompt:  # a failed check is swallowed by the node, so the result is noted instead
-            overlapped.append(summary_started.wait(5))
-        return invoke(prompt, config)
-
-    def watched_stream(prompt, config=None):
-        summary_started.set()
-        yield from stream(prompt, config)
-
-    llm.invoke, llm.stream = slow_check, watched_stream
-    final, _ = run()
-    assert final["type"] == "done" and repo.get_video(VID)["status"] == "ready"
-    assert overlapped == [True]
+    assert "classify" not in llm.kinds()  # the stored verdict is kept, only overridden
 
 
 def test_same_video_twice_runs_once(llm, youtube):
