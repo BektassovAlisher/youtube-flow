@@ -190,9 +190,19 @@ def start_processing(video_id: str, url: str, force: bool = False, kind: str | N
 
     def work(job: Job) -> None:
         started, marks = time.monotonic(), []
+        run: dict = {"steps": {}, "tokens": {"input": 0, "output": 0}, "model": config.GEMINI_MODEL}
+        # in LangSmith (when tracing is on) the whole run is one trace, found by the material's id
+        trace = {"run_name": "VideoFlow: обработка материала", "tags": ["process"], "metadata": {"video_id": video_id}}
         try:
-            for mode, payload in graph.stream(initial_state(video_id, force), stream_mode=["custom", "updates"]):
+            for mode, payload in graph.stream(initial_state(video_id, force), trace, stream_mode=["custom", "updates"]):
                 if mode == "custom":
+                    for step, seconds in (payload.get("timing") or {}).items():
+                        if step == "first_token":
+                            run["first_token"] = seconds
+                        else:  # the script and its critic can run more than once
+                            run["steps"][step] = round(run["steps"].get(step, 0) + seconds, 2)
+                    for name, n in (payload.get("usage") or {}).items():
+                        run["tokens"][name] += n
                     hub.emit(job, payload)
                 else:  # a step finished: when, counting from the start (steps already saved do nothing)
                     marks += [f"{step} {time.monotonic() - started:.1f}" for step, update in payload.items() if update]
@@ -201,8 +211,13 @@ def start_processing(video_id: str, url: str, force: bool = False, kind: str | N
         except Exception as e:
             repo.fail(video_id, humanize(e))
             raise
-        log.info("%s: готово за %.1f с; шаги закончились на секунде: %s",
-                 video_id, time.monotonic() - started, ", ".join(marks) or "—")
+        finally:  # a failed run counts too: the retry only does what is left, and the numbers add up
+            run["seconds"] = round(time.monotonic() - started, 2)
+            if run["steps"]:
+                repo.add_metrics(video_id, run)
+                hub.emit(job, {"meta": True})  # pages reload the material and show the numbers
+        log.info("%s: готово за %.1f с; шаги закончились на секунде: %s; токены: %d на входе, %d на выходе",
+                 video_id, run["seconds"], ", ".join(marks) or "—", run["tokens"]["input"], run["tokens"]["output"])
 
     return hub.submit(video_id, "process", work)
 
@@ -215,8 +230,10 @@ def start_audio(video_id: str, script: str) -> tuple[Job, bool]:
         started = time.monotonic()
         audio = generate_podcast_audio(script, on_progress=lambda d, t: hub.emit(job, {"progress": (d, t)}))
         repo.save_audio(video_id, audio)
+        seconds = round(time.monotonic() - started, 2)
+        repo.add_metrics(video_id, {"audio": seconds})
         hub.emit(job, {"audio_saved": True})
-        log.info("%s: аудио готово за %.1f с", video_id, time.monotonic() - started)
+        log.info("%s: аудио готово за %.1f с", video_id, seconds)
 
     return hub.submit(video_id, "audio", work)
 

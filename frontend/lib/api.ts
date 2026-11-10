@@ -25,7 +25,18 @@ export type Classification = { category: string; is_suitable: boolean; confidenc
 export type Link = { title: string; url: string };
 export type Recs = { courses: Link[]; books: Link[]; from_cache?: boolean };
 export type Source = { timestamp: string; url: string };
-export type Answer = { answer: string; sources: Source[] };
+export type Answer = { answer: string; sources: Source[]; seconds?: number };
+
+// how the processing went, saved by the API: seconds per step, time to the first words, tokens, model
+export type Metrics = {
+  seconds: number;
+  steps: Record<string, number>;
+  tokens?: { input?: number; output?: number };
+  first_token?: number;
+  audio?: number;
+  model?: string;
+  runs?: number;
+};
 
 export type VideoInfo = VideoListItem & {
   summary: string;
@@ -40,6 +51,7 @@ export type VideoInfo = VideoListItem & {
   indexed: boolean;
   transcript_source: string | null;
   anchors: Record<string, string> | null;
+  metrics: Metrics | null;
   jobs: Job[];
 };
 
@@ -87,7 +99,7 @@ export async function readNdjson(res: Response, onEvent: (event: any) => void) {
 export type AnswerEvent =
   | { type: "sources"; sources: Source[] }
   | { type: "token"; text: string }
-  | { type: "done"; cached: boolean }
+  | { type: "done"; cached: boolean; seconds?: number }
   | { type: "error"; message: string };
 
 export async function askStream(id: string, question: string, history: { q: string; a: string }[], onEvent: (e: AnswerEvent) => void) {
@@ -243,3 +255,21 @@ export function seekTarget(href: string | undefined, videoId: string): number | 
   const m = href?.match(/^https:\/\/youtu\.be\/([\w-]{11})\?t=(\d+)$/);
   return m && m[1] === videoId ? +m[2] : null;
 }
+
+// "12,4 с" / "1 мин 5 с"
+export function seconds(sec: number): string {
+  if (sec >= 60) return `${Math.floor(sec / 60)} мин ${Math.round(sec % 60)} с`;
+  return `${sec.toLocaleString("ru-RU", { maximumFractionDigits: 1 })} с`;
+}
+
+const STEP_LABEL: [string, string][] = [
+  ["transcript", "текст"],
+  ["classify", "проверка"],
+  ["summarize", "конспект"],
+  ["keywords", "термины"],
+  ["script", "сценарий"],
+  ["critic", "редактор"],
+  ["index", "индекс для вопросов"],
+];
+// the steps in the order they ran, with their times; the index is built in parallel with the summary
+export const stepTimes = (m: Metrics) => STEP_LABEL.filter(([key]) => m.steps[key] !== undefined).map(([key, label]) => ({ label, time: seconds(m.steps[key]) }));

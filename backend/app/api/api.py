@@ -29,6 +29,8 @@ async def lifespan(_app: FastAPI):
     await asyncio.to_thread(init_db)  # waits for Postgres instead of crashing while it starts
     log.info("Модель Gemini: %s, запасная: %s; распознавание речи: Groq %s",
              config.GEMINI_MODEL, config.GEMINI_FALLBACK_MODEL or "нет", config.WHISPER_MODEL)
+    log.info("LangSmith: %s", f"трассировка включена, проект «{config.LANGSMITH_PROJECT}»" if config.LANGSMITH_TRACING
+             else "выключен (нужны LANGSMITH_TRACING=true и LANGSMITH_API_KEY)")
     if not config.API_TOKEN:
         log.warning("API_TOKEN не задан: запускать обработку и удалять видео может любой, кто видит API")
     jobs.resume_interrupted()
@@ -137,6 +139,12 @@ def _start_text(text: str, title: str | None, request: Request) -> str:
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/stats")
+def stats():
+    """Average processing time per step, time to the first words and tokens over the processed materials."""
+    return repo.stats()
 
 
 @app.get("/videos")
